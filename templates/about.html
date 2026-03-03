@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}About — Campbell Council Meetings{% endblock %}
+
+{% block content %}
+<h1>About This Site</h1>
+
+<p>This site monitors the <a href="https://www.campbellca.gov/AgendaCenter/City-Council-10">City of Campbell Agenda Center</a> for new city council meeting agendas and minutes.</p>
+
+<h2>How It Works</h2>
+<ol>
+    <li><strong>Scraping:</strong> The site periodically checks the city's website for new agenda and minutes PDFs.</li>
+    <li><strong>Summarization:</strong> New documents are sent to <a href="https://www.anthropic.com/claude">Claude</a> (an AI assistant by Anthropic) which reads the PDF and generates a plain-language summary.</li>
+    <li><strong>Notification:</strong> Subscribers are notified via email and/or Bluesky when new summaries are available.</li>
+</ol>
+
+<h2>Important Notes</h2>
+<ul>
+    <li>Summaries are <strong>AI-generated</strong> and may contain errors or omissions. Always refer to the original PDF documents for official information.</li>
+    <li>This site is <strong>not affiliated</strong> with the City of Campbell. It is an independent project.</li>
+    <li>Meeting dates follow the City Council schedule: typically the 1st and 3rd Tuesday of each month.</li>
+</ul>
+
+<h2>Source Code</h2>
+<p>This project is open source. The code is available on <a href="https://github.com/brooksmcmillin/council-meetings">GitHub</a>.</p>
+{% endblock %}

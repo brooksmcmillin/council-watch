@@ -1,0 +1,227 @@
+:root {
+    --text: #1a1a2e;
+    --bg: #fafafa;
+    --card-bg: #fff;
+    --border: #e0e0e0;
+    --accent: #2d5f8a;
+    --accent-hover: #1e4468;
+    --muted: #666;
+    --pill-bg: #eef3f8;
+    --disclaimer-bg: #fff8e1;
+    --max-width: 52rem;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    line-height: 1.6;
+}
+
+header {
+    border-bottom: 1px solid var(--border);
+    background: var(--card-bg);
+}
+
+nav {
+    max-width: var(--max-width);
+    margin: 0 auto;
+    padding: 1rem 1.5rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.logo {
+    font-weight: 700;
+    font-size: 1.1rem;
+    text-decoration: none;
+    color: var(--text);
+}
+
+.nav-links {
+    display: flex;
+    gap: 1.5rem;
+}
+
+.nav-links a {
+    text-decoration: none;
+    color: var(--muted);
+}
+
+.nav-links a:hover {
+    color: var(--accent);
+}
+
+main {
+    max-width: var(--max-width);
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+}
+
+h1 {
+    font-size: 1.75rem;
+    margin-bottom: 0.5rem;
+}
+
+h2 {
+    font-size: 1.3rem;
+    margin-bottom: 0.5rem;
+}
+
+h3 {
+    font-size: 1.05rem;
+    margin-bottom: 0.25rem;
+}
+
+.subtitle {
+    color: var(--muted);
+    margin-bottom: 2rem;
+}
+
+/* Meeting cards */
+.meeting-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 1rem;
+}
+
+.meeting-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.meeting-header h2 {
+    font-size: 1.1rem;
+    margin: 0;
+}
+
+.meeting-header h2 a {
+    color: var(--text);
+    text-decoration: none;
+}
+
+.meeting-header h2 a:hover {
+    color: var(--accent);
+}
+
+.meeting-header time {
+    color: var(--muted);
+    font-size: 0.9rem;
+    white-space: nowrap;
+}
+
+.meeting-links {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.75rem;
+}
+
+.pill {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    background: var(--pill-bg);
+    color: var(--accent);
+    border-radius: 99px;
+    font-size: 0.85rem;
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.pill:hover {
+    background: var(--accent);
+    color: #fff;
+}
+
+.summary-preview p {
+    color: var(--muted);
+    font-size: 0.95rem;
+}
+
+/* Meeting detail */
+.meeting-detail {
+    margin-bottom: 2rem;
+}
+
+.meeting-detail time {
+    display: block;
+    color: var(--muted);
+    margin-bottom: 1rem;
+}
+
+.summary-section {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem 1.5rem;
+    margin: 1.5rem 0;
+}
+
+.summary-content {
+    margin: 0.75rem 0;
+    line-height: 1.7;
+}
+
+/* AI disclaimer */
+.ai-disclaimer {
+    font-size: 0.8rem;
+    color: var(--muted);
+    background: var(--disclaimer-bg);
+    padding: 0.5rem 0.75rem;
+    border-radius: 4px;
+    margin-top: 0.75rem;
+}
+
+/* About page */
+main ol,
+main ul {
+    margin: 0.75rem 0 1.5rem 1.5rem;
+}
+
+main li {
+    margin-bottom: 0.4rem;
+}
+
+/* Footer */
+footer {
+    border-top: 1px solid var(--border);
+    max-width: var(--max-width);
+    margin: 3rem auto 0;
+    padding: 1.5rem;
+    text-align: center;
+    font-size: 0.85rem;
+    color: var(--muted);
+}
+
+footer a {
+    color: var(--accent);
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+    nav {
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .meeting-header {
+        flex-direction: column;
+    }
+
+    h1 {
+        font-size: 1.4rem;
+    }
+}

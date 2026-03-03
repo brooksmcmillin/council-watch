@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block title %}{{ meeting.title }} — Campbell Council Meetings{% endblock %}
+
+{% block content %}
+<article class="meeting-detail">
+    <h1>{{ meeting.title }}</h1>
+    <time datetime="{{ meeting.date.isoformat() }}">{{ meeting.date.strftime('%B %d, %Y') }}</time>
+
+    <div class="meeting-links">
+        {% if meeting.agenda_url %}
+        <a href="{{ base_url }}{{ meeting.agenda_url }}" target="_blank" class="pill">Agenda PDF</a>
+        {% endif %}
+        {% if meeting.minutes_url %}
+        <a href="{{ base_url }}{{ meeting.minutes_url }}" target="_blank" class="pill">Minutes PDF</a>
+        {% endif %}
+        {% if meeting.video_url %}
+        <a href="{{ meeting.video_url }}" target="_blank" class="pill">Video</a>
+        {% endif %}
+    </div>
+
+    {% if agenda and agenda.summary %}
+    <section class="summary-section">
+        <h2>Agenda Summary</h2>
+        <div class="summary-content">{{ agenda.summary | replace('\n', '<br>') | safe }}</div>
+        <p class="ai-disclaimer">AI-generated summary ({{ agenda.summary_model }}, {{ agenda.summarized_at.strftime('%Y-%m-%d') if agenda.summarized_at else 'unknown' }}) — may contain errors. <a href="{{ base_url }}{{ meeting.agenda_url }}" target="_blank">Read the original document</a>.</p>
+    </section>
+    {% endif %}
+
+    {% if minutes and minutes.summary %}
+    <section class="summary-section">
+        <h2>Minutes Summary</h2>
+        <div class="summary-content">{{ minutes.summary | replace('\n', '<br>') | safe }}</div>
+        <p class="ai-disclaimer">AI-generated summary ({{ minutes.summary_model }}, {{ minutes.summarized_at.strftime('%Y-%m-%d') if minutes.summarized_at else 'unknown' }}) — may contain errors. <a href="{{ base_url }}{{ meeting.minutes_url }}" target="_blank">Read the original document</a>.</p>
+    </section>
+    {% endif %}
+
+    {% if not (agenda and agenda.summary) and not (minutes and minutes.summary) %}
+    <p>No summaries available yet. Summaries are generated automatically and should appear soon.</p>
+    {% endif %}
+</article>
+
+<p><a href="/">&larr; All meetings</a></p>
+{% endblock %}

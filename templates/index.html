@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Campbell Council Meetings{% endblock %}
+
+{% block content %}
+<h1>Campbell City Council Meetings</h1>
+<p class="subtitle">Agendas and minutes from the Campbell, CA City Council — automatically summarized.</p>
+
+{% if not meeting_data %}
+<p>No meetings found yet. Check back soon.</p>
+{% endif %}
+
+{% for item in meeting_data %}
+{% set m = item.meeting %}
+{% set agenda = item.agenda %}
+{% set minutes = item.minutes %}
+<article class="meeting-card">
+    <div class="meeting-header">
+        <h2>
+            <a href="/meeting/{{ m.id }}">{{ m.title }}</a>
+        </h2>
+        <time datetime="{{ m.date.isoformat() }}">{{ m.date.strftime('%B %d, %Y') }}</time>
+    </div>
+
+    <div class="meeting-links">
+        {% if m.agenda_url %}
+        <a href="{{ base_url }}{{ m.agenda_url }}" target="_blank" class="pill">Agenda PDF</a>
+        {% endif %}
+        {% if m.minutes_url %}
+        <a href="{{ base_url }}{{ m.minutes_url }}" target="_blank" class="pill">Minutes PDF</a>
+        {% endif %}
+        {% if m.video_url %}
+        <a href="{{ m.video_url }}" target="_blank" class="pill">Video</a>
+        {% endif %}
+    </div>
+
+    {% if agenda and agenda.summary %}
+    <div class="summary-preview">
+        <h3>Agenda Summary</h3>
+        <p>{{ agenda.summary[:300] }}{% if agenda.summary|length > 300 %}… <a href="/meeting/{{ m.id }}">Read more</a>{% endif %}</p>
+        <p class="ai-disclaimer">AI-generated summary — may contain errors. <a href="{{ base_url }}{{ m.agenda_url }}" target="_blank">Read the original document</a>.</p>
+    </div>
+    {% endif %}
+</article>
+{% endfor %}
+{% endblock %}
