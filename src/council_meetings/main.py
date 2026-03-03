@@ -40,25 +40,13 @@ BASE_URL = "https://www.campbellca.gov"
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request, db: Session = Depends(get_db)):
-    meetings = (
-        db.query(Meeting)
-        .order_by(Meeting.date.desc(), Meeting.id.desc())
-        .all()
-    )
+    meetings = db.query(Meeting).order_by(Meeting.date.desc(), Meeting.id.desc()).all()
 
     # Attach documents to each meeting for template access
     meeting_data = []
     for m in meetings:
-        agenda_doc = (
-            db.query(Document)
-            .filter_by(meeting_id=m.id, doc_type="agenda")
-            .first()
-        )
-        minutes_doc = (
-            db.query(Document)
-            .filter_by(meeting_id=m.id, doc_type="minutes")
-            .first()
-        )
+        agenda_doc = db.query(Document).filter_by(meeting_id=m.id, doc_type="agenda").first()
+        minutes_doc = db.query(Document).filter_by(meeting_id=m.id, doc_type="minutes").first()
         meeting_data.append(
             {
                 "meeting": m,
@@ -77,20 +65,10 @@ def index(request: Request, db: Session = Depends(get_db)):
 def meeting_detail(meeting_id: int, request: Request, db: Session = Depends(get_db)):
     meeting = db.query(Meeting).filter_by(id=meeting_id).first()
     if not meeting:
-        return templates.TemplateResponse(
-            "404.html", {"request": request}, status_code=404
-        )
+        return templates.TemplateResponse("404.html", {"request": request}, status_code=404)
 
-    agenda_doc = (
-        db.query(Document)
-        .filter_by(meeting_id=meeting.id, doc_type="agenda")
-        .first()
-    )
-    minutes_doc = (
-        db.query(Document)
-        .filter_by(meeting_id=meeting.id, doc_type="minutes")
-        .first()
-    )
+    agenda_doc = db.query(Document).filter_by(meeting_id=meeting.id, doc_type="agenda").first()
+    minutes_doc = db.query(Document).filter_by(meeting_id=meeting.id, doc_type="minutes").first()
 
     return templates.TemplateResponse(
         "meeting.html",

@@ -12,11 +12,8 @@ COPY templates/ templates/
 COPY static/ static/
 COPY alembic.ini alembic/
 
-# Install dependencies
-RUN uv sync --frozen --no-dev
-
-# Create data directory
-RUN mkdir -p /app/data/pdfs
+# Install dependencies and create data directory
+RUN uv sync --frozen --no-dev && mkdir -p /app/data/pdfs
 
 # Copy alembic config
 COPY alembic/ alembic/

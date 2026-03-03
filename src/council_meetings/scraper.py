@@ -42,7 +42,7 @@ def _parse_date_from_slug(slug: str) -> date | None:
         return None
     mmddyyyy = m.group(1)
     try:
-        return datetime.strptime(mmddyyyy, "%m%d%Y").date()
+        return datetime.strptime(mmddyyyy, "%m%d%Y").date()  # noqa: DTZ007
     except ValueError:
         return None
 
@@ -57,7 +57,7 @@ def parse_meetings_html(html: str) -> list[dict]:
     meetings: list[dict] = []
 
     for h3 in soup.find_all("h3", class_="noMargin"):
-        h3_id = h3.get("id", "")
+        h3_id = str(h3.get("id", ""))
         # h3 id is like "h409162025-3145"
         slug_match = SLUG_RE.search(h3_id)
         if not slug_match:
@@ -180,11 +180,7 @@ def ensure_document(
 
     Returns the Document if newly created, None if already existed.
     """
-    existing = (
-        db.query(Document)
-        .filter_by(meeting_id=meeting.id, doc_type=doc_type)
-        .first()
-    )
+    existing = db.query(Document).filter_by(meeting_id=meeting.id, doc_type=doc_type).first()
     if existing:
         return None
 
@@ -259,17 +255,13 @@ def scrape_meetings(years: list[int] | None = None) -> ScrapeLog:
 
                 # Agenda
                 if data["agenda_url"]:
-                    doc = ensure_document(
-                        db, client, meeting, "agenda", data["agenda_url"]
-                    )
+                    doc = ensure_document(db, client, meeting, "agenda", data["agenda_url"])
                     if doc:
                         new_docs += 1
 
                 # Minutes
                 if data["minutes_url"]:
-                    doc = ensure_document(
-                        db, client, meeting, "minutes", data["minutes_url"]
-                    )
+                    doc = ensure_document(db, client, meeting, "minutes", data["minutes_url"])
                     if doc:
                         new_docs += 1
 
@@ -308,8 +300,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     log = scrape_meetings()
     print(
-        f"Scrape complete: {log.meetings_found} meetings found, "
-        f"{log.new_documents} new documents"
+        f"Scrape complete: {log.meetings_found} meetings found, {log.new_documents} new documents"
     )
     if log.errors:
         print(f"Errors:\n{log.errors}")

@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import anthropic
+from anthropic.types import TextBlock
+
 from council_meetings.config import settings
 from council_meetings.db import SessionLocal
 from council_meetings.models import Document
@@ -72,7 +74,10 @@ def summarize_pdf(pdf_path: str, doc_type: str) -> str:
         ],
     )
 
-    return message.content[0].text
+    block = message.content[0]
+    if not isinstance(block, TextBlock):
+        raise TypeError(f"Expected TextBlock, got {type(block).__name__}")
+    return block.text
 
 
 def summarize_unsummarized() -> int:
@@ -103,9 +108,9 @@ def summarize_unsummarized() -> int:
         count = 0
         for doc in docs:
             try:
-                logger.info(
-                    "Summarizing %s (id=%d, type=%s)", doc.pdf_path, doc.id, doc.doc_type
-                )
+                if not doc.pdf_path:
+                    continue
+                logger.info("Summarizing %s (id=%d, type=%s)", doc.pdf_path, doc.id, doc.doc_type)
                 summary = summarize_pdf(doc.pdf_path, doc.doc_type)
                 doc.summary = summary
                 doc.summary_model = MODEL

@@ -23,7 +23,7 @@ def _build_email_html(meeting: Meeting, doc: Document) -> str:
 
     return f"""\
 <h2>{meeting.title} — {doc_label} Summary</h2>
-<p><strong>{meeting.date.strftime('%B %d, %Y')}</strong></p>
+<p><strong>{meeting.date.strftime("%B %d, %Y")}</strong></p>
 
 {summary_html}
 
@@ -43,9 +43,9 @@ def _build_email_text(meeting: Meeting, doc: Document) -> str:
 
     return f"""\
 {meeting.title} — {doc_label} Summary
-{meeting.date.strftime('%B %d, %Y')}
+{meeting.date.strftime("%B %d, %Y")}
 
-{doc.summary or '(no summary)'}
+{doc.summary or "(no summary)"}
 
 ---
 AI-generated summary — may contain errors.
@@ -60,7 +60,9 @@ def send_email(meeting: Meeting, doc: Document) -> bool:
         return False
 
     doc_label = "Agenda" if doc.doc_type == "agenda" else "Minutes"
-    subject = f"Campbell Council: {meeting.title} — {doc_label} ({meeting.date.strftime('%m/%d/%Y')})"
+    subject = (
+        f"Campbell Council: {meeting.title} — {doc_label} ({meeting.date.strftime('%m/%d/%Y')})"
+    )
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
@@ -143,13 +145,11 @@ def notify_new_summaries() -> int:
             if not meeting:
                 continue
 
-            if not doc.notified_email and settings.email_enabled:
-                if send_email(meeting, doc):
-                    doc.notified_email = True
+            if not doc.notified_email and settings.email_enabled and send_email(meeting, doc):
+                doc.notified_email = True
 
-            if not doc.notified_bluesky and settings.bluesky_enabled:
-                if post_bluesky(meeting, doc):
-                    doc.notified_bluesky = True
+            if not doc.notified_bluesky and settings.bluesky_enabled and post_bluesky(meeting, doc):
+                doc.notified_bluesky = True
 
             # If neither channel is configured, mark as notified to avoid re-processing
             if not settings.email_enabled:
