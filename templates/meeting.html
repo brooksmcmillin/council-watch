@@ -21,7 +21,7 @@
 
     {% if agenda and agenda.summary %}
     <section class="summary-section">
-        <h2>Agenda Summary</h2>
+        <h2>Agenda Summary{% if agenda.revised_at %} <span class="revised-badge">Revised</span>{% endif %}</h2>
         <div class="summary-content">{{ agenda.summary | replace('\n', '<br>') | safe }}</div>
         <p class="ai-disclaimer">AI-generated summary ({{ agenda.summary_model }}, {{ agenda.summarized_at.strftime('%Y-%m-%d') if agenda.summarized_at else 'unknown' }}) — may contain errors. <a href="{{ base_url }}{{ meeting.agenda_url }}" target="_blank">Read the original document</a>.</p>
     </section>
@@ -29,7 +29,7 @@
 
     {% if minutes and minutes.summary %}
     <section class="summary-section">
-        <h2>Minutes Summary</h2>
+        <h2>Minutes Summary{% if minutes.revised_at %} <span class="revised-badge">Revised</span>{% endif %}</h2>
         <div class="summary-content">{{ minutes.summary | replace('\n', '<br>') | safe }}</div>
         <p class="ai-disclaimer">AI-generated summary ({{ minutes.summary_model }}, {{ minutes.summarized_at.strftime('%Y-%m-%d') if minutes.summarized_at else 'unknown' }}) — may contain errors. <a href="{{ base_url }}{{ meeting.minutes_url }}" target="_blank">Read the original document</a>.</p>
     </section>

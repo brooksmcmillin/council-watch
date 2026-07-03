@@ -225,3 +225,17 @@ footer a {
         font-size: 1.4rem;
     }
 }
+
+/* Revised badge */
+.revised-badge {
+    display: inline-block;
+    font-size: 0.7em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    vertical-align: middle;
+    padding: 0.15em 0.5em;
+    border-radius: 0.75em;
+    color: #fff;
+    background: var(--accent);
+}

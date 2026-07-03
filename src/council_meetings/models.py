@@ -43,6 +43,9 @@ class Document(Base):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary_model: Mapped[str | None] = mapped_column(Text, nullable=True)
     summarized_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    # Set when the source PDF was re-fetched and found to differ from the
+    # previously stored copy. Drives a "Revised" indicator in notifications.
+    revised_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     notified_email: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     notified_bluesky: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[dt.datetime] = mapped_column(
@@ -60,4 +63,7 @@ class ScrapeLog(Base):
     finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     meetings_found: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     new_documents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    revised_documents: Mapped[int] = mapped_column(
+        Integer, server_default="0", default=0, nullable=False
+    )
     errors: Mapped[str | None] = mapped_column(Text, nullable=True)

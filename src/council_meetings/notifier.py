@@ -12,8 +12,14 @@ from council_meetings.models import Document, Meeting
 logger = logging.getLogger(__name__)
 
 
+def _doc_label(doc: Document) -> str:
+    """Human label for a document, prefixed 'Revised' if the PDF was updated."""
+    label = "Agenda" if doc.doc_type == "agenda" else "Minutes"
+    return f"Revised {label}" if doc.revised_at else label
+
+
 def _build_email_html(meeting: Meeting, doc: Document) -> str:
-    doc_label = "Agenda" if doc.doc_type == "agenda" else "Minutes"
+    doc_label = _doc_label(doc)
     base = settings.app_base_url.rstrip("/")
     city_base = "https://www.campbellca.gov"
     source_url = f"{city_base}{doc.source_url}"
@@ -30,14 +36,14 @@ def _build_email_html(meeting: Meeting, doc: Document) -> str:
 <hr>
 <p style="font-size: 0.85em; color: #666;">
 AI-generated summary — may contain errors.
-<a href="{source_url}">Read the original {doc_label.lower()} PDF</a> |
+<a href="{source_url}">Read the original {doc.doc_type} PDF</a> |
 <a href="{meeting_url}">View on site</a>
 </p>
 """
 
 
 def _build_email_text(meeting: Meeting, doc: Document) -> str:
-    doc_label = "Agenda" if doc.doc_type == "agenda" else "Minutes"
+    doc_label = _doc_label(doc)
     base = settings.app_base_url.rstrip("/")
     city_base = "https://www.campbellca.gov"
 
@@ -59,7 +65,7 @@ def send_email(meeting: Meeting, doc: Document) -> bool:
     if not settings.email_enabled:
         return False
 
-    doc_label = "Agenda" if doc.doc_type == "agenda" else "Minutes"
+    doc_label = _doc_label(doc)
     subject = (
         f"Campbell Council: {meeting.title} — {doc_label} ({meeting.date.strftime('%m/%d/%Y')})"
     )
@@ -97,7 +103,7 @@ def post_bluesky(meeting: Meeting, doc: Document) -> bool:
         at_client = Client()
         at_client.login(settings.bluesky_handle, settings.bluesky_app_password)
 
-        doc_label = "Agenda" if doc.doc_type == "agenda" else "Minutes"
+        doc_label = _doc_label(doc)
         date_str = meeting.date.strftime("%m/%d/%Y")
         meeting_url = f"{settings.app_base_url.rstrip('/')}/meeting/{meeting.id}"
 
