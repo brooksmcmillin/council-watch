@@ -175,21 +175,34 @@ def ensure_document(
     meeting: Meeting,
     doc_type: str,
     source_url: str,
-) -> Document | None:
-    """Ensure a document exists for this meeting/type. Download PDF if new.
+) -> str | None:
+    """Ensure a document exists and is current for this meeting/type.
 
-    Returns the Document if newly created, None if already existed.
+    New documents are downloaded. Existing documents are re-downloaded and
+    their SHA-256 compared against the stored ``pdf_hash`` so that revisions
+    published on the city side are detected. When a source PDF has changed,
+    the stored file is replaced and the summary + notification state are
+    cleared so the pipeline re-summarizes and re-notifies.
+
+    Returns a status string:
+        "created"   – a brand-new document was downloaded
+        "revised"   – an existing document's source PDF changed
+        "unchanged" – an existing document's source PDF was identical
+        None        – the download failed
     """
     existing = db.query(Document).filter_by(meeting_id=meeting.id, doc_type=doc_type).first()
-    if existing:
-        return None
 
-    # Build local path: data/pdfs/2025-09-16_agenda_3145.pdf
-    date_str = meeting.date.isoformat()
-    filename = f"{date_str}_{doc_type}_{meeting.civicplus_id}.pdf"
-    pdf_path = Path(settings.pdf_storage_dir) / filename
+    # Build local path: data/pdfs/2025-09-16_agenda_3145.pdf. Reuse the existing
+    # path when present so a revised PDF overwrites the file already on disk.
+    if existing and existing.pdf_path:
+        pdf_path = Path(existing.pdf_path)
+    else:
+        date_str = meeting.date.isoformat()
+        filename = f"{date_str}_{doc_type}_{meeting.civicplus_id}.pdf"
+        pdf_path = Path(settings.pdf_storage_dir) / filename
 
-    logger.info("Downloading %s for %s (%s)", doc_type, meeting.title, source_url)
+    action = "Re-downloading" if existing else "Downloading"
+    logger.info("%s %s for %s (%s)", action, doc_type, meeting.title, source_url)
     try:
         pdf_hash = download_pdf(client, source_url, pdf_path)
     except httpx.HTTPError as e:
@@ -198,21 +211,49 @@ def ensure_document(
 
     time.sleep(DOWNLOAD_DELAY)
 
-    doc = Document(
-        meeting_id=meeting.id,
-        doc_type=doc_type,
-        source_url=source_url,
-        pdf_path=str(pdf_path),
-        pdf_hash=pdf_hash,
+    if existing is None:
+        doc = Document(
+            meeting_id=meeting.id,
+            doc_type=doc_type,
+            source_url=source_url,
+            pdf_path=str(pdf_path),
+            pdf_hash=pdf_hash,
+        )
+        db.add(doc)
+        db.flush()
+        return "created"
+
+    if existing.pdf_hash == pdf_hash:
+        return "unchanged"
+
+    logger.info(
+        "Detected revised %s for %s (%s -> %s)",
+        doc_type,
+        meeting.title,
+        existing.pdf_hash,
+        pdf_hash,
     )
-    db.add(doc)
+    existing.pdf_path = str(pdf_path)
+    existing.pdf_hash = pdf_hash
+    existing.source_url = source_url
+    existing.summary = None
+    existing.summary_model = None
+    existing.summarized_at = None
+    existing.notified_email = False
+    existing.notified_bluesky = False
+    existing.revised_at = datetime.now(UTC)
     db.flush()
-    return doc
+    return "revised"
 
 
 def scrape_meetings(years: list[int] | None = None) -> ScrapeLog:
     """Run a full scrape cycle. Returns the ScrapeLog entry."""
-    log = ScrapeLog(started_at=datetime.now(UTC), meetings_found=0, new_documents=0)
+    log = ScrapeLog(
+        started_at=datetime.now(UTC),
+        meetings_found=0,
+        new_documents=0,
+        revised_documents=0,
+    )
     errors: list[str] = []
 
     db = SessionLocal()
@@ -248,22 +289,20 @@ def scrape_meetings(years: list[int] | None = None) -> ScrapeLog:
         log.meetings_found = len(unique_meetings)
 
         new_docs = 0
+        revised_docs = 0
         for data in unique_meetings:
             savepoint = db.begin_nested()
             try:
                 meeting, _is_new = upsert_meeting(db, data)
 
-                # Agenda
-                if data["agenda_url"]:
-                    doc = ensure_document(db, client, meeting, "agenda", data["agenda_url"])
-                    if doc:
+                for doc_type, url_key in (("agenda", "agenda_url"), ("minutes", "minutes_url")):
+                    if not data[url_key]:
+                        continue
+                    status = ensure_document(db, client, meeting, doc_type, data[url_key])
+                    if status == "created":
                         new_docs += 1
-
-                # Minutes
-                if data["minutes_url"]:
-                    doc = ensure_document(db, client, meeting, "minutes", data["minutes_url"])
-                    if doc:
-                        new_docs += 1
+                    elif status == "revised":
+                        revised_docs += 1
 
                 savepoint.commit()
             except Exception as e:
@@ -273,6 +312,7 @@ def scrape_meetings(years: list[int] | None = None) -> ScrapeLog:
                 errors.append(msg)
 
         log.new_documents = new_docs
+        log.revised_documents = revised_docs
         log.finished_at = datetime.now(UTC)
         log.errors = "\n".join(errors) if errors else None
 
@@ -300,7 +340,8 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     log = scrape_meetings()
     print(
-        f"Scrape complete: {log.meetings_found} meetings found, {log.new_documents} new documents"
+        f"Scrape complete: {log.meetings_found} meetings found, "
+        f"{log.new_documents} new documents, {log.revised_documents} revised"
     )
     if log.errors:
         print(f"Errors:\n{log.errors}")
