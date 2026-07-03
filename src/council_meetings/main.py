@@ -56,8 +56,9 @@ def index(request: Request, db: Session = Depends(get_db)):
         )
 
     return templates.TemplateResponse(
+        request,
         "index.html",
-        {"request": request, "meeting_data": meeting_data, "base_url": BASE_URL},
+        {"meeting_data": meeting_data, "base_url": BASE_URL},
     )
 
 
@@ -65,15 +66,15 @@ def index(request: Request, db: Session = Depends(get_db)):
 def meeting_detail(meeting_id: int, request: Request, db: Session = Depends(get_db)):
     meeting = db.query(Meeting).filter_by(id=meeting_id).first()
     if not meeting:
-        return templates.TemplateResponse("404.html", {"request": request}, status_code=404)
+        return templates.TemplateResponse(request, "404.html", status_code=404)
 
     agenda_doc = db.query(Document).filter_by(meeting_id=meeting.id, doc_type="agenda").first()
     minutes_doc = db.query(Document).filter_by(meeting_id=meeting.id, doc_type="minutes").first()
 
     return templates.TemplateResponse(
+        request,
         "meeting.html",
         {
-            "request": request,
             "meeting": meeting,
             "agenda": agenda_doc,
             "minutes": minutes_doc,
@@ -84,7 +85,7 @@ def meeting_detail(meeting_id: int, request: Request, db: Session = Depends(get_
 
 @app.get("/about", response_class=HTMLResponse)
 def about(request: Request):
-    return templates.TemplateResponse("about.html", {"request": request})
+    return templates.TemplateResponse(request, "about.html")
 
 
 @app.get("/health")
