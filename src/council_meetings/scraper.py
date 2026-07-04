@@ -130,14 +130,40 @@ def fetch_year(client: httpx.Client, year: int) -> str:
     return resp.text
 
 
-def download_pdf(client: httpx.Client, relative_url: str, dest_path: Path) -> str:
-    """Download a PDF and return its SHA-256 hash."""
+def download_pdf(client: httpx.Client, relative_url: str, dest_path: Path) -> tuple[str, int]:
+    """Download a PDF and return its (SHA-256 hash, byte size)."""
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     url = f"{BASE_URL}{relative_url}"
     resp = client.get(url)
     resp.raise_for_status()
     dest_path.write_bytes(resp.content)
-    return hashlib.sha256(resp.content).hexdigest()
+    return hashlib.sha256(resp.content).hexdigest(), len(resp.content)
+
+
+def head_content_length(client: httpx.Client, relative_url: str) -> int | None:
+    """Return the server-reported Content-Length for a URL via a HEAD request.
+
+    Used as a cheap pre-check to avoid re-downloading unchanged PDFs. Returns
+    ``None`` when the request fails or the server omits a usable
+    ``Content-Length`` header, in which case callers fall back to a full
+    download. CivicPlus ViewFile responses carry no ``ETag`` / ``Last-Modified``
+    validators, so a HEAD size check is the only body-free freshness signal
+    available.
+    """
+    url = f"{BASE_URL}{relative_url}"
+    try:
+        resp = client.head(url)
+        resp.raise_for_status()
+    except httpx.HTTPError as e:
+        logger.warning("HEAD pre-check failed for %s: %s", url, e)
+        return None
+    raw = resp.headers.get("content-length")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 def upsert_meeting(db: Session, data: dict) -> tuple[Meeting, bool]:
@@ -178,19 +204,41 @@ def ensure_document(
 ) -> str | None:
     """Ensure a document exists and is current for this meeting/type.
 
-    New documents are downloaded. Existing documents are re-downloaded and
-    their SHA-256 compared against the stored ``pdf_hash`` so that revisions
-    published on the city side are detected. When a source PDF has changed,
-    the stored file is replaced and the summary + notification state are
-    cleared so the pipeline re-summarizes and re-notifies.
+    New documents are downloaded. For existing documents, a cheap HEAD
+    ``Content-Length`` pre-check is issued first: when the server-reported size
+    matches the stored ``pdf_size`` the source is assumed unchanged and the full
+    download (which can be 100+ MB for agenda packets) is skipped. Otherwise the
+    PDF is re-downloaded and its SHA-256 compared against the stored ``pdf_hash``
+    so that revisions published on the city side are detected. When a source PDF
+    has changed, the stored file is replaced and the summary + notification state
+    are cleared so the pipeline re-summarizes and re-notifies.
+
+    The size pre-check is a weaker signal than the hash: a revision that keeps
+    the exact same byte count is skipped. This is an accepted trade-off — PDF
+    edits virtually always change the byte size, revisions are rare, and full
+    hash verification still runs whenever a download does occur. CivicPlus does
+    not send ``ETag`` / ``Last-Modified``, so proper conditional GETs are not an
+    option; a HEAD size check is the only body-free freshness signal available.
 
     Returns a status string:
         "created"   – a brand-new document was downloaded
         "revised"   – an existing document's source PDF changed
-        "unchanged" – an existing document's source PDF was identical
+        "unchanged" – an existing document's source PDF was identical (by hash,
+                      or skipped via a matching HEAD Content-Length)
         None        – the download failed
     """
     existing = db.query(Document).filter_by(meeting_id=meeting.id, doc_type=doc_type).first()
+
+    # HEAD pre-check: when we already have a stored size, avoid the full GET if
+    # the server-reported Content-Length is unchanged. Skips both the (large)
+    # body transfer and the DOWNLOAD_DELAY for the common unchanged case.
+    if existing is not None and existing.pdf_size is not None:
+        remote_size = head_content_length(client, source_url)
+        if remote_size is not None and remote_size == existing.pdf_size:
+            logger.debug(
+                "Skipping unchanged %s for %s (size %d)", doc_type, meeting.title, remote_size
+            )
+            return "unchanged"
 
     # Build local path: data/pdfs/2025-09-16_agenda_3145.pdf. Reuse the existing
     # path when present so a revised PDF overwrites the file already on disk.
@@ -204,7 +252,7 @@ def ensure_document(
     action = "Re-downloading" if existing else "Downloading"
     logger.info("%s %s for %s (%s)", action, doc_type, meeting.title, source_url)
     try:
-        pdf_hash = download_pdf(client, source_url, pdf_path)
+        pdf_hash, pdf_size = download_pdf(client, source_url, pdf_path)
     except httpx.HTTPError as e:
         logger.error("Failed to download %s: %s", source_url, e)
         return None
@@ -218,12 +266,17 @@ def ensure_document(
             source_url=source_url,
             pdf_path=str(pdf_path),
             pdf_hash=pdf_hash,
+            pdf_size=pdf_size,
         )
         db.add(doc)
         db.flush()
         return "created"
 
     if existing.pdf_hash == pdf_hash:
+        # Backfill pdf_size for legacy rows so future scrapes can use the HEAD
+        # pre-check even though nothing changed this cycle.
+        existing.pdf_size = pdf_size
+        db.flush()
         return "unchanged"
 
     logger.info(
@@ -235,6 +288,7 @@ def ensure_document(
     )
     existing.pdf_path = str(pdf_path)
     existing.pdf_hash = pdf_hash
+    existing.pdf_size = pdf_size
     existing.source_url = source_url
     existing.summary = None
     existing.summary_model = None
