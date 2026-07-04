@@ -1,70 +1,222 @@
-name: Claude Code Review
+name: Claude Reviews
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  code-review:
-    name: Code Review
+  combined-review:
+    name: Combined Review
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       pull-requests: write
+      issues: read
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-      - uses: anthropics/claude-code-action@v1
+          fetch-depth: 50
+
+      - name: Minimize previous review comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          REPO=${{ github.repository }}
+          MARKER="<!-- claude-combined-review -->"
+
+          COMMENT_NODE_ID=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            --paginate \
+            --jq "[.[] | select(.body | contains(\"${MARKER}\"))] | last | .node_id // empty" 2>/dev/null)
+
+          if [ -n "$COMMENT_NODE_ID" ]; then
+            echo "Minimizing previous review comment: $COMMENT_NODE_ID"
+            gh api graphql -f query='
+              mutation {
+                minimizeComment(input: {subjectId: "'"$COMMENT_NODE_ID"'", classifier: OUTDATED}) {
+                  minimizedComment { isMinimized }
+                }
+              }' 2>/dev/null || echo "Warning: failed to minimize comment"
+          else
+            echo "No previous review comment found"
+          fi
+
+      - name: Run Claude Combined Review
+        id: claude-review
+        timeout-minutes: 15
+        uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          direct_prompt: |
-            Review this PR for code quality, correctness, and maintainability.
-            Focus on:
-            - Logic errors or bugs
-            - Missing error handling
-            - SQLAlchemy session management issues
+          allowed_bots: "dependabot[bot]"
+          prompt: |
+            You are a code and security reviewer. Review this pull request for code quality,
+            correctness, maintainability, AND security vulnerabilities.
+
+            Use the repository's CLAUDE.md for guidance on style, conventions, and codebase architecture.
+
+            ## Required Output — Read First
+
+            You MUST post exactly one PR comment via `gh pr comment "${{ github.event.pull_request.number }}" --body "..."` before this turn ends. There is no path where this review completes without posting a fresh comment on the current run.
+
+            This applies even when:
+            - The PR has not changed since your previous review
+            - Every previously flagged issue is now fixed
+            - You find nothing at all to flag
+
+            In any of those cases, still post a short "All clear" comment — first line is the marker, last line is the verdict (see sections below). A skipped post on a re-review is a CI bug, not a valid outcome.
+
+            Why this is non-negotiable: a downstream "Review gate" step selects the most recently created `<!-- claude-combined-review -->` comment and reads its `<!-- verdict: ... -->` line. If you do not post on this run, the gate reads a stale comment from a previous run and blocks merge even though the current code is fine.
+
+            ## Comment Marker
+
+            You MUST start your review comment with exactly this HTML comment on its own line:
+            `<!-- claude-combined-review -->`
+
+            This marker is used to track and manage review comments across pushes. Do not omit it.
+
+            ## Reading Previous Feedback
+
+            Before writing your review, read the most recent review comment on this PR to understand what was previously flagged. New comments reiterate any still-open issues, so only the latest is needed:
+
+            ```
+            gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+              --paginate --jq '[.[] | select(.body | contains("<!-- claude-combined-review -->"))] | last | .body // empty'
+            ```
+
+            ## Formatting Rules
+
+            Compare the current code against previously flagged issues and categorize:
+
+            - **Previously flagged + now fixed** → show with ~~strikethrough~~ and a "Fixed" note
+            - **Previously flagged + still present** → reference briefly without re-explaining
+            - **New issues** → standard formatting with full explanation
+
+            Structure your review using these sections (omit any section that has no items):
+
+            ### Resolved
+            Items previously flagged that are now fixed, shown with ~~strikethrough~~. Example:
+            - ~~Missing error handling in `parse_config()`~~ — Fixed
+
+            ### Still Open
+            Previously flagged items **within the PR's changed code** that remain unaddressed.
+            Do NOT include pre-existing issues outside the PR's scope here.
+
+            ### New Issues
+            Newly discovered problems **that must be fixed before merge**. Full explanation required.
+
+            ### Security
+            Security-specific findings: injection vulnerabilities (SQL, command, XSS, template injection),
+            authentication/authorization issues, data exposure (secrets, PII in logs, information leakage),
+            input validation at system boundaries, SSRF, path traversal, and other OWASP Top 10 issues.
+            If no security issues found, note "No security issues identified."
+
+            ### Suggestions
+            Non-blocking observations: minor improvements, follow-up items, style preferences,
+            or pre-existing issues noticed outside the PR scope. These do not block merge.
+
+            If everything is clean and there are no issues in any category, you still post — a short "All clear" comment with the marker on the first line and `<!-- verdict: pass -->` on the last. See "Required Output" above; not posting is never an option.
+
+            ## Verdict
+
+            At the very end of your comment, you MUST include a machine-readable verdict line as an HTML comment:
+            - `<!-- verdict: pass -->` if there are NO blocking issues (i.e., no New Issues, Still Open, or Security items that must be fixed before merge)
+            - `<!-- verdict: fail -->` if there ARE blocking issues that must be fixed before merge
+
+            A `fail` verdict requires at least one item that would cause a runtime error, data loss,
+            security vulnerability, or incorrect behavior in production. Style preferences, type
+            annotation choices, test methodology opinions, and minor improvements belong in Suggestions
+            and do NOT warrant a fail verdict.
+
+            If you flagged an item as non-blocking or low-severity in a previous review, do not
+            escalate it to blocking in subsequent reviews unless new information changes the severity.
+
+            ## Review Focus Areas
+
+            **Code Quality:**
+            - Correctness: logic errors, edge cases, error handling
+            - Maintainability: readability, structure, naming
+            - Style: consistency with project patterns
+            - SQLAlchemy session management (session lifecycle, DetachedInstanceError, savepoints)
             - FastAPI best practices
-            - Python type hint correctness
-            - Security concerns (SQL injection, XSS in templates, credential handling)
+            - Python type hint correctness (built-in generics, PEP 604 unions)
 
-            Format your review as a structured comment with sections for issues found.
-            If no issues, say so briefly.
-          timeout_minutes: 10
-
-  security-review:
-    name: Security Review
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          direct_prompt: |
-            Review this PR with a security focus. Check for:
-            - Injection vulnerabilities (SQL, command, template)
-            - Credential or secret exposure
+            **Security:**
+            - Injection vulnerabilities (SQL, command, XSS, Jinja2 template injection)
+            - Authentication and authorization issues
+            - Data exposure (secrets, PII in logs, information leakage)
+            - Input validation at system boundaries
             - Unsafe HTTP client usage (SSRF, missing TLS verification)
-            - Authentication/authorization gaps
-            - Insecure deserialization
             - Path traversal in file operations
-            - Hardcoded secrets or tokens
+            - SSRF, path traversal, and other OWASP Top 10 issues
 
-            Format your review as a structured comment. If no issues, say so briefly.
-          timeout_minutes: 10
+            ## Tool Usage
+            Use Read, Grep, Glob, and the gh commands to review the code. Do NOT attempt to run
+            security scanners (trivy, bandit, semgrep, npm audit, pip-audit, etc.) — dependency
+            scanning is handled by a separate CI workflow. Focus on manual code review of the diff.
 
-  review-gate:
-    name: Review Gate
-    runs-on: ubuntu-latest
-    needs: [code-review, security-review]
-    steps:
-      - run: echo "All reviews passed"
+            Use `gh pr comment` with your Bash tool to post exactly one comment on the PR before exiting. Per "Required Output" above, posting is mandatory on every run.
+            IMPORTANT: Post ONE complete comment. Never post placeholder, partial, or "will update later" comments.
+            Write the full review content directly in the --body argument.
+
+          claude_args: '--allowed-tools "Write,Read,Grep,Glob,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh api:*)"'
+
+      - name: Ensure review comment was posted
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          REPO=${{ github.repository }}
+          MARKER="<!-- claude-combined-review -->"
+
+          FOUND=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            --paginate \
+            --jq "[.[] | select(.body | contains(\"${MARKER}\"))] | length")
+
+          if [ "$FOUND" = "0" ] || [ -z "$FOUND" ]; then
+            echo "::warning::Review comment was not posted by Claude. Posting fallback."
+            gh pr comment "$PR_NUMBER" --body "$(cat <<'FALLBACK'
+          <!-- claude-combined-review -->
+
+          **Review did not complete successfully.** Claude was unable to post its review
+          (likely due to tool permission denials or a timeout). Please re-run the workflow or review manually.
+
+          <!-- verdict: error -->
+          FALLBACK
+          )"
+          fi
+
+      - name: Review gate
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          REPO=${{ github.repository }}
+
+          echo "=== Fetching CI reviewer comment ==="
+
+          REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            --paginate \
+            --jq '[.[] | select(.body | contains("<!-- claude-combined-review -->"))] | last | .body // empty')
+
+          VERDICT=$(echo "$REVIEW" | grep -oP '<!-- verdict: \K(pass|fail|error)' | tail -1)
+          if [ -z "$VERDICT" ]; then
+            echo "::error::Review missing verdict line (<!-- verdict: pass/fail -->)"
+            exit 1
+          elif [ "$VERDICT" = "error" ]; then
+            echo "::error::Review infrastructure error — the AI reviewer failed to run. Re-run the 'Claude Reviews' workflow or review manually. This is NOT a code issue."
+            exit 1
+          elif [ "$VERDICT" = "fail" ]; then
+            echo "::error::Review verdict: fail — see review comment for issues to fix"
+            exit 1
+          fi
+
+          echo "Review Gate passed."
