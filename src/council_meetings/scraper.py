@@ -29,7 +29,14 @@ SLUG_RE = re.compile(r"(\d{8})-(\d+)")
 
 def _client() -> httpx.Client:
     return httpx.Client(
-        headers={"User-Agent": USER_AGENT},
+        headers={
+            "User-Agent": USER_AGENT,
+            # Force identity encoding so a GET's stored byte size (len of the
+            # decoded body) and a HEAD's raw Content-Length are always in the
+            # same units, keeping the size pre-check in ensure_document exact.
+            # PDFs are already compressed, so this costs no extra transfer.
+            "Accept-Encoding": "identity",
+        },
         follow_redirects=True,
         timeout=30.0,
     )

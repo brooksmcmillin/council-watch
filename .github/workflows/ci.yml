@@ -30,6 +30,15 @@ jobs:
       - run: uv sync --frozen --all-groups
       - run: uv run pyright src/
 
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen --all-groups
+      - run: uv run pytest -q
+
   security:
     name: Dependency Audit
     runs-on: ubuntu-latest
