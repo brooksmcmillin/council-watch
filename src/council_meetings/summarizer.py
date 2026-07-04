@@ -14,8 +14,6 @@ from council_meetings.models import Document
 
 logger = logging.getLogger(__name__)
 
-MODEL = "claude-sonnet-4-20250514"
-
 AGENDA_PROMPT = """\
 You are summarizing a city council meeting agenda for Campbell, California.
 Write a clear, accessible summary for residents. Include:
@@ -54,7 +52,7 @@ def summarize_pdf(pdf_path: str, doc_type: str) -> str:
 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     message = client.messages.create(
-        model=MODEL,
+        model=settings.summarization_model,
         max_tokens=2048,
         messages=[
             {
@@ -113,7 +111,7 @@ def summarize_unsummarized() -> int:
                 logger.info("Summarizing %s (id=%d, type=%s)", doc.pdf_path, doc.id, doc.doc_type)
                 summary = summarize_pdf(doc.pdf_path, doc.doc_type)
                 doc.summary = summary
-                doc.summary_model = MODEL
+                doc.summary_model = settings.summarization_model
                 doc.summarized_at = datetime.now(UTC)
                 db.commit()
                 count += 1
