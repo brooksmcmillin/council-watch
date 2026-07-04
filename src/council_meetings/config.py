@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     # Required
     anthropic_api_key: str = ""
 
+    # Summarization model (env-overridable via SUMMARIZATION_MODEL)
+    summarization_model: str = "claude-sonnet-5"
+
     # Database
     database_url: str = "sqlite:///data/council.db"
     pdf_storage_dir: str = "data/pdfs"
