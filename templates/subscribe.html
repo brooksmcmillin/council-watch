@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}Subscribe — Campbell Council Meetings{% endblock %}
+
+{% block content %}
+<h1>Email Subscriptions</h1>
+<p class="subtitle">Get an email whenever a new agenda or minutes summary is posted.</p>
+
+{% if success %}
+<p class="notice notice-success">{{ success }}</p>
+{% else %}
+{% if error %}
+<p class="notice notice-error">{{ error }}</p>
+{% endif %}
+<form method="post" action="/subscribe" class="subscribe-form">
+    <label for="email">Email address</label>
+    <input
+        type="email"
+        id="email"
+        name="email"
+        placeholder="you@example.com"
+        value="{{ email or '' }}"
+        required
+    >
+    <button type="submit">Subscribe</button>
+</form>
+<p class="ai-disclaimer">
+    We only use your address to send meeting-summary notifications. Every email
+    includes a one-click unsubscribe link.
+</p>
+{% endif %}
+{% endblock %}

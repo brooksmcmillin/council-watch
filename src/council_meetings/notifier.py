@@ -5,9 +5,12 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+from sqlalchemy.orm import Session
+
 from council_meetings.config import settings
 from council_meetings.db import SessionLocal
 from council_meetings.models import Document, Meeting
+from council_meetings.subscriptions import active_subscribers
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +21,12 @@ def _doc_label(doc: Document) -> str:
     return f"Revised {label}" if doc.revised_at else label
 
 
-def _build_email_html(meeting: Meeting, doc: Document) -> str:
+def _unsubscribe_url(token: str) -> str:
+    base = settings.app_base_url.rstrip("/")
+    return f"{base}/unsubscribe/{token}"
+
+
+def _build_email_html(meeting: Meeting, doc: Document, unsubscribe_url: str | None) -> str:
     doc_label = _doc_label(doc)
     base = settings.app_base_url.rstrip("/")
     city_base = "https://www.campbellca.gov"
@@ -26,6 +34,10 @@ def _build_email_html(meeting: Meeting, doc: Document) -> str:
     meeting_url = f"{base}/meeting/{meeting.id}"
 
     summary_html = (doc.summary or "").replace("\n", "<br>")
+
+    unsubscribe_html = ""
+    if unsubscribe_url:
+        unsubscribe_html = f'<br><a href="{unsubscribe_url}">Unsubscribe</a> from these emails.'
 
     return f"""\
 <h2>{meeting.title} — {doc_label} Summary</h2>
@@ -37,15 +49,17 @@ def _build_email_html(meeting: Meeting, doc: Document) -> str:
 <p style="font-size: 0.85em; color: #666;">
 AI-generated summary — may contain errors.
 <a href="{source_url}">Read the original {doc.doc_type} PDF</a> |
-<a href="{meeting_url}">View on site</a>
+<a href="{meeting_url}">View on site</a>{unsubscribe_html}
 </p>
 """
 
 
-def _build_email_text(meeting: Meeting, doc: Document) -> str:
+def _build_email_text(meeting: Meeting, doc: Document, unsubscribe_url: str | None) -> str:
     doc_label = _doc_label(doc)
     base = settings.app_base_url.rstrip("/")
     city_base = "https://www.campbellca.gov"
+
+    unsubscribe_text = f"\nUnsubscribe: {unsubscribe_url}" if unsubscribe_url else ""
 
     return f"""\
 {meeting.title} — {doc_label} Summary
@@ -56,40 +70,94 @@ def _build_email_text(meeting: Meeting, doc: Document) -> str:
 ---
 AI-generated summary — may contain errors.
 Original PDF: {city_base}{doc.source_url}
-View on site: {base}/meeting/{meeting.id}
+View on site: {base}/meeting/{meeting.id}{unsubscribe_text}
 """
 
 
-def send_email(meeting: Meeting, doc: Document) -> bool:
-    """Send an email notification for a new document summary."""
+def _email_recipients(db: Session) -> list[tuple[str, str | None]]:
+    """Resolve the recipient list as ``(address, unsubscribe_token)`` pairs.
+
+    Active subscribers get a personalized unsubscribe token. The static
+    ``email_to`` env list is kept as a fallback/admin channel: those addresses
+    are always included (with a ``None`` token — no unsubscribe link), except
+    when an admin address is itself an active subscriber, to avoid a duplicate
+    send.
+    """
+    recipients: list[tuple[str, str | None]] = []
+    seen: set[str] = set()
+    for sub in active_subscribers(db):
+        recipients.append((sub.email, sub.unsubscribe_token))
+        seen.add(sub.email.lower())
+
+    for raw in settings.email_to.split(","):
+        address = raw.strip()
+        key = address.lower()
+        if address and key not in seen:
+            recipients.append((address, None))
+            seen.add(key)
+
+    return recipients
+
+
+def _build_message(
+    meeting: Meeting, doc: Document, subject: str, address: str, token: str | None
+) -> MIMEMultipart:
+    unsubscribe_url = _unsubscribe_url(token) if token else None
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = settings.email_from
+    msg["To"] = address
+    if unsubscribe_url:
+        # RFC 8058 one-click unsubscribe — the POST endpoint mirrors the GET link.
+        msg["List-Unsubscribe"] = f"<{unsubscribe_url}>"
+        msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+
+    msg.attach(MIMEText(_build_email_text(meeting, doc, unsubscribe_url), "plain"))
+    msg.attach(MIMEText(_build_email_html(meeting, doc, unsubscribe_url), "html"))
+    return msg
+
+
+def send_email(meeting: Meeting, doc: Document, db: Session) -> bool:
+    """Send per-subscriber email notifications for a new document summary.
+
+    Returns ``True`` when the channel is satisfied (delivered to at least one
+    recipient, or there were no recipients to send to), ``False`` on an SMTP
+    failure that should be retried on the next pipeline run.
+    """
     if not settings.email_enabled:
         return False
+
+    recipients = _email_recipients(db)
+    if not recipients:
+        logger.info("No email recipients for document %d; skipping", doc.id)
+        return True
 
     doc_label = _doc_label(doc)
     subject = (
         f"Campbell Council: {meeting.title} — {doc_label} ({meeting.date.strftime('%m/%d/%Y')})"
     )
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = settings.email_from
-    msg["To"] = settings.email_to
-
-    msg.attach(MIMEText(_build_email_text(meeting, doc), "plain"))
-    msg.attach(MIMEText(_build_email_html(meeting, doc), "html"))
-
     try:
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
             server.starttls()
             if settings.smtp_user:
                 server.login(settings.smtp_user, settings.smtp_password)
-            recipients = [r.strip() for r in settings.email_to.split(",")]
-            server.sendmail(settings.email_from, recipients, msg.as_string())
-        logger.info("Email sent for document %d", doc.id)
-        return True
+
+            sent = 0
+            for address, token in recipients:
+                msg = _build_message(meeting, doc, subject, address, token)
+                try:
+                    server.sendmail(settings.email_from, [address], msg.as_string())
+                    sent += 1
+                except Exception as e:
+                    logger.error("Failed to send to %s for document %d: %s", address, doc.id, e)
     except Exception as e:
-        logger.error("Failed to send email for document %d: %s", doc.id, e)
+        logger.error("SMTP failure for document %d: %s", doc.id, e)
         return False
+
+    logger.info("Email sent for document %d to %d/%d recipients", doc.id, sent, len(recipients))
+    return sent > 0
 
 
 def post_bluesky(meeting: Meeting, doc: Document) -> bool:
@@ -151,7 +219,7 @@ def notify_new_summaries() -> int:
             if not meeting:
                 continue
 
-            if not doc.notified_email and settings.email_enabled and send_email(meeting, doc):
+            if not doc.notified_email and settings.email_enabled and send_email(meeting, doc, db):
                 doc.notified_email = True
 
             if not doc.notified_bluesky and settings.bluesky_enabled and post_bluesky(meeting, doc):
