@@ -48,6 +48,11 @@ def subscribe(db: Session, email: str) -> tuple[Subscriber, str]:
     return subscriber, "created"
 
 
+def find_by_token(db: Session, token: str) -> Subscriber | None:
+    """Look up a subscriber by unsubscribe token without mutating state."""
+    return db.query(Subscriber).filter_by(unsubscribe_token=token).first()
+
+
 def unsubscribe(db: Session, token: str) -> Subscriber | None:
     """Deactivate the subscriber owning ``token``.
 

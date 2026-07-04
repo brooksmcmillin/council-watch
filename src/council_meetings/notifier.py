@@ -84,15 +84,17 @@ def _email_recipients(db: Session) -> list[tuple[str, str | None]]:
     send.
     """
     recipients: list[tuple[str, str | None]] = []
-    subscriber_emails: set[str] = set()
+    seen: set[str] = set()
     for sub in active_subscribers(db):
         recipients.append((sub.email, sub.unsubscribe_token))
-        subscriber_emails.add(sub.email)
+        seen.add(sub.email.lower())
 
     for raw in settings.email_to.split(","):
         address = raw.strip()
-        if address and address.lower() not in subscriber_emails:
+        key = address.lower()
+        if address and key not in seen:
             recipients.append((address, None))
+            seen.add(key)
 
     return recipients
 

@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -118,24 +118,51 @@ def subscribe_submit(
 
 
 @app.get("/unsubscribe/{token}", response_class=HTMLResponse)
-def unsubscribe_get(token: str, request: Request, db: Session = Depends(get_db)):
-    subscriber = subscriptions.unsubscribe(db, token)
+def unsubscribe_confirm(token: str, request: Request, db: Session = Depends(get_db)):
+    """Render an unsubscribe confirmation page.
+
+    This handler is intentionally read-only: it is the link embedded in emails,
+    and mail-security scanners/link-prefetchers routinely GET such URLs before a
+    human ever clicks. Performing the unsubscribe here would silently drop
+    legitimate subscribers. The mutation happens only on the POST below, driven
+    by an explicit button press (or an RFC 8058 one-click POST).
+    """
+    subscriber = subscriptions.find_by_token(db, token)
     found = subscriber is not None
     return templates.TemplateResponse(
         request,
         "unsubscribe.html",
-        {"found": found, "email": subscriber.email if subscriber else None},
+        {
+            "found": found,
+            "done": False,
+            "token": token,
+            "email": subscriber.email if subscriber else None,
+        },
         status_code=200 if found else 404,
     )
 
 
-@app.post("/unsubscribe/{token}", response_class=PlainTextResponse)
-def unsubscribe_post(token: str, db: Session = Depends(get_db)):
-    """RFC 8058 one-click unsubscribe endpoint (used by mail clients)."""
+@app.post("/unsubscribe/{token}")
+def unsubscribe_submit(token: str, request: Request, db: Session = Depends(get_db)):
+    """Perform the unsubscribe.
+
+    Serves both the confirmation-page button and RFC 8058 one-click POSTs. Mail
+    clients issuing the one-click request ignore the response body, so returning
+    the HTML confirmation page here is fine for both callers.
+    """
     subscriber = subscriptions.unsubscribe(db, token)
     if subscriber is None:
-        return PlainTextResponse("Unknown unsubscribe token.", status_code=404)
-    return PlainTextResponse("You have been unsubscribed.")
+        return templates.TemplateResponse(
+            request,
+            "unsubscribe.html",
+            {"found": False, "done": True, "token": token, "email": None},
+            status_code=404,
+        )
+    return templates.TemplateResponse(
+        request,
+        "unsubscribe.html",
+        {"found": True, "done": True, "token": token, "email": subscriber.email},
+    )
 
 
 @app.get("/about", response_class=HTMLResponse)

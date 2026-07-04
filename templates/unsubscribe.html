@@ -4,16 +4,21 @@
 
 {% block content %}
 <h1>Unsubscribe</h1>
-{% if found %}
+{% if not found %}
+<p class="notice notice-error">
+    That unsubscribe link isn't valid. It may have already been used, or the
+    address was never subscribed.
+</p>
+{% elif done %}
 <p class="notice notice-success">
     {{ email }} has been unsubscribed. You won't receive any more meeting-summary
     emails.
 </p>
 <p>Changed your mind? <a href="/subscribe">Subscribe again</a>.</p>
 {% else %}
-<p class="notice notice-error">
-    That unsubscribe link isn't valid. It may have already been used, or the
-    address was never subscribed.
-</p>
+<p>Unsubscribe <strong>{{ email }}</strong> from meeting-summary emails?</p>
+<form method="post" action="/unsubscribe/{{ token }}" class="subscribe-form">
+    <button type="submit">Confirm unsubscribe</button>
+</form>
 {% endif %}
 {% endblock %}
