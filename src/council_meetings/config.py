@@ -1,6 +1,50 @@
 from pydantic_settings import BaseSettings
 
 
+class CityConfig(BaseSettings):
+    """Per-city configuration for the CivicPlus source being monitored.
+
+    Everything Campbell-specific lives here so additional CivicPlus cities can
+    be added without forking the scraper/summarizer/notifier code — override any
+    field via a ``CITY_``-prefixed env var (e.g. ``CITY_BASE_URL``,
+    ``CITY_CATEGORY_ID``). Defaults describe the City of Campbell, CA.
+    """
+
+    model_config = {
+        "env_prefix": "CITY_",
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+    }
+
+    # Short name used in email subjects and the bot User-Agent (e.g. "Campbell").
+    name: str = "Campbell"
+    # City + state as it should read inside the summarizer prompts
+    # (e.g. "Campbell, California").
+    location: str = "Campbell, California"
+    # Human display name for notifications (e.g. "Campbell City Council").
+    display_name: str = "Campbell City Council"
+
+    # CivicPlus site root, no trailing slash (e.g. "https://www.campbellca.gov").
+    base_url: str = "https://www.campbellca.gov"
+    # AgendaCenter category path segment (e.g. "City-Council-10").
+    agenda_path: str = "City-Council-10"
+    # CivicPlus category id (the ``catID`` used by the backfill endpoint).
+    category_id: str = "10"
+
+    # Identifies the bot to the city's servers.
+    user_agent: str = (
+        "CampbellCouncilMonitor/1.0 (+https://github.com/brooksmcmillin/council-meetings)"
+    )
+
+    @property
+    def agenda_center_url(self) -> str:
+        return f"{self.base_url}/AgendaCenter/{self.agenda_path}"
+
+    @property
+    def backfill_url(self) -> str:
+        return f"{self.base_url}/AgendaCenter/UpdateCategoryList"
+
+
 class Settings(BaseSettings):
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
@@ -50,3 +94,4 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+city = CityConfig()

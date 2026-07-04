@@ -7,7 +7,7 @@ from email.mime.text import MIMEText
 
 from sqlalchemy.orm import Session
 
-from council_meetings.config import settings
+from council_meetings.config import city, settings
 from council_meetings.db import SessionLocal
 from council_meetings.models import Document, Meeting
 from council_meetings.subscriptions import active_subscribers
@@ -29,8 +29,7 @@ def _unsubscribe_url(token: str) -> str:
 def _build_email_html(meeting: Meeting, doc: Document, unsubscribe_url: str | None) -> str:
     doc_label = _doc_label(doc)
     base = settings.app_base_url.rstrip("/")
-    city_base = "https://www.campbellca.gov"
-    source_url = f"{city_base}{doc.source_url}"
+    source_url = f"{city.base_url}{doc.source_url}"
     meeting_url = f"{base}/meeting/{meeting.id}"
 
     summary_html = (doc.summary or "").replace("\n", "<br>")
@@ -57,7 +56,6 @@ AI-generated summary — may contain errors.
 def _build_email_text(meeting: Meeting, doc: Document, unsubscribe_url: str | None) -> str:
     doc_label = _doc_label(doc)
     base = settings.app_base_url.rstrip("/")
-    city_base = "https://www.campbellca.gov"
 
     unsubscribe_text = f"\nUnsubscribe: {unsubscribe_url}" if unsubscribe_url else ""
 
@@ -69,7 +67,7 @@ def _build_email_text(meeting: Meeting, doc: Document, unsubscribe_url: str | No
 
 ---
 AI-generated summary — may contain errors.
-Original PDF: {city_base}{doc.source_url}
+Original PDF: {city.base_url}{doc.source_url}
 View on site: {base}/meeting/{meeting.id}{unsubscribe_text}
 """
 
@@ -135,7 +133,7 @@ def send_email(meeting: Meeting, doc: Document, db: Session) -> bool:
 
     doc_label = _doc_label(doc)
     subject = (
-        f"Campbell Council: {meeting.title} — {doc_label} ({meeting.date.strftime('%m/%d/%Y')})"
+        f"{city.name} Council: {meeting.title} — {doc_label} ({meeting.date.strftime('%m/%d/%Y')})"
     )
 
     try:
@@ -181,7 +179,7 @@ def post_bluesky(meeting: Meeting, doc: Document) -> bool:
             summary_snippet += "…"
 
         tb = client_utils.TextBuilder()
-        tb.text(f"Campbell City Council {doc_label} — {date_str}\n\n")
+        tb.text(f"{city.display_name} {doc_label} — {date_str}\n\n")
         tb.text(f"{summary_snippet}\n\n")
         tb.link("View full summary", meeting_url)
 

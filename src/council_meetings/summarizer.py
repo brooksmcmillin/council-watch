@@ -8,14 +8,16 @@ from pathlib import Path
 import anthropic
 from anthropic.types import TextBlock
 
-from council_meetings.config import settings
+from council_meetings.config import city, settings
 from council_meetings.db import SessionLocal
 from council_meetings.models import Document
 
 logger = logging.getLogger(__name__)
 
+# ``{location}`` is filled from the configured city (e.g. "Campbell, California")
+# so the prompts are not tied to a single city.
 AGENDA_PROMPT = """\
-You are summarizing a city council meeting agenda for Campbell, California.
+You are summarizing a city council meeting agenda for {location}.
 Write a clear, accessible summary for residents. Include:
 
 1. A brief overview of the meeting (1-2 sentences)
@@ -27,7 +29,7 @@ Keep the summary under 800 words. Use plain language, not bureaucratic jargon.
 If the agenda is mostly procedural (closed session, adjournment), note that briefly."""
 
 MINUTES_PROMPT = """\
-You are summarizing city council meeting minutes for Campbell, California.
+You are summarizing city council meeting minutes for {location}.
 Write a clear, accessible summary for residents. Include:
 
 1. A brief overview of the meeting (1-2 sentences)
@@ -39,6 +41,11 @@ Keep the summary under 1000 words. Use plain language, not bureaucratic jargon.
 If the minutes are mostly procedural (closed session), note that briefly."""
 
 
+def _prompt_for(doc_type: str) -> str:
+    template = AGENDA_PROMPT if doc_type == "agenda" else MINUTES_PROMPT
+    return template.format(location=city.location)
+
+
 def summarize_pdf(pdf_path: str, doc_type: str) -> str:
     """Send a PDF to Claude and get a summary back."""
     path = Path(pdf_path)
@@ -48,7 +55,7 @@ def summarize_pdf(pdf_path: str, doc_type: str) -> str:
     pdf_bytes = path.read_bytes()
     pdf_b64 = base64.standard_b64encode(pdf_bytes).decode("ascii")
 
-    prompt = AGENDA_PROMPT if doc_type == "agenda" else MINUTES_PROMPT
+    prompt = _prompt_for(doc_type)
 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     message = client.messages.create(
