@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     scrape_interval_minutes: int = 60
     app_base_url: str = "http://localhost:8000"
 
+    # Historical backfill: periodically re-scrape prior years so late-posted
+    # minutes and older meetings are captured without manual runs.
+    backfill_years: int = 2  # number of prior years to re-scrape (0 disables)
+    backfill_interval_hours: int = 168  # default weekly
+
     @property
     def email_enabled(self) -> bool:
         return bool(self.smtp_host and self.email_from and self.email_to)
