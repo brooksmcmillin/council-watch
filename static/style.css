@@ -226,6 +226,65 @@ footer a {
     }
 }
 
+/* Subscribe / unsubscribe */
+.subscribe-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: flex-end;
+    margin: 1.5rem 0 1rem;
+}
+
+.subscribe-form label {
+    display: block;
+    width: 100%;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+
+.subscribe-form input[type="email"] {
+    flex: 1 1 18rem;
+    padding: 0.6rem 0.75rem;
+    font-size: 1rem;
+    border: 1px solid var(--border);
+    border-radius: 0.35rem;
+    background: var(--card-bg);
+    color: var(--text);
+}
+
+.subscribe-form button {
+    padding: 0.6rem 1.25rem;
+    font-size: 1rem;
+    font-weight: 600;
+    color: #fff;
+    background: var(--accent);
+    border: none;
+    border-radius: 0.35rem;
+    cursor: pointer;
+}
+
+.subscribe-form button:hover {
+    background: var(--accent-hover);
+}
+
+.notice {
+    padding: 0.85rem 1rem;
+    border-radius: 0.35rem;
+    margin: 1.25rem 0;
+}
+
+.notice-success {
+    background: var(--pill-bg);
+    border: 1px solid var(--accent);
+    color: var(--accent-hover);
+}
+
+.notice-error {
+    background: var(--disclaimer-bg);
+    border: 1px solid #e0c66a;
+    color: #7a5c00;
+}
+
 /* Revised badge */
 .revised-badge {
     display: inline-block;

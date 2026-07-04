@@ -20,7 +20,10 @@ class Settings(BaseSettings):
     smtp_user: str = ""
     smtp_password: str = ""
     email_from: str = ""
-    email_to: str = ""  # comma-separated recipients
+    # Comma-separated static recipients. Optional now that delivery is
+    # subscriber-driven; kept as a fallback/admin channel — these addresses
+    # always receive notifications (no unsubscribe link).
+    email_to: str = ""
 
     # Bluesky (optional — skip if blank)
     bluesky_handle: str = ""
@@ -37,7 +40,9 @@ class Settings(BaseSettings):
 
     @property
     def email_enabled(self) -> bool:
-        return bool(self.smtp_host and self.email_from and self.email_to)
+        # Recipients come from the subscribers table (plus the optional static
+        # email_to list), so the channel is enabled on SMTP config alone.
+        return bool(self.smtp_host and self.email_from)
 
     @property
     def bluesky_enabled(self) -> bool:

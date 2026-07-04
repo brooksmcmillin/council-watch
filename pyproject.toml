@@ -19,6 +19,7 @@ dependencies = [
     "anthropic>=0.52",
     "atproto>=0.0.56",
     "apscheduler>=3.10,<4",
+    "python-multipart>=0.0.32",
 ]
 
 [dependency-groups]
