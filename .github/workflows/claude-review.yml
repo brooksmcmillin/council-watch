@@ -19,6 +19,9 @@ jobs:
       issues: read
       id-token: write
 
+    env:
+      REVIEW_FILE: ${{ github.workspace }}/claude-review-output.md
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -64,27 +67,35 @@ jobs:
 
             ## Required Output — Read First
 
-            You MUST post exactly one PR comment via `gh pr comment "${{ github.event.pull_request.number }}" --body "..."` before this turn ends. There is no path where this review completes without posting a fresh comment on the current run.
+            You MUST write your complete review to the file `${{ env.REVIEW_FILE }}` using the
+            `Write` tool before this turn ends. Do NOT post a PR comment yourself — a later
+            deterministic CI step reads this file, posts it as the review comment, and gates the
+            merge on its verdict. Writing the file is the only action that completes the review.
 
             This applies even when:
             - The PR has not changed since your previous review
             - Every previously flagged issue is now fixed
             - You find nothing at all to flag
 
-            In any of those cases, still post a short "All clear" comment — first line is the marker, last line is the verdict (see sections below). A skipped post on a re-review is a CI bug, not a valid outcome.
+            In any of those cases, still write a short "All clear" review to the file — first line
+            is the marker, last line is the verdict (see below). A missing or empty file is treated
+            as an infrastructure error and blocks merge, so always write it.
 
-            Why this is non-negotiable: a downstream "Review gate" step selects the most recently created `<!-- claude-combined-review -->` comment and reads its `<!-- verdict: ... -->` line. If you do not post on this run, the gate reads a stale comment from a previous run and blocks merge even though the current code is fine.
+            Write the file exactly once, with the full, final review content. Never write a
+            placeholder, partial, or "will update later" file.
 
-            ## Comment Marker
+            ## File Format
 
-            You MUST start your review comment with exactly this HTML comment on its own line:
+            The first line of the file MUST be exactly this HTML comment marker on its own line:
             `<!-- claude-combined-review -->`
 
-            This marker is used to track and manage review comments across pushes. Do not omit it.
+            The last line of the file MUST be a machine-readable verdict (see "Verdict" below).
 
             ## Reading Previous Feedback
 
-            Before writing your review, read the most recent review comment on this PR to understand what was previously flagged. New comments reiterate any still-open issues, so only the latest is needed:
+            Before writing your review, read the most recent review comment on this PR to understand
+            what was previously flagged, so you can track fixed vs. still-open items. New comments
+            reiterate any still-open issues, so only the latest is needed:
 
             ```
             gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
@@ -122,11 +133,13 @@ jobs:
             Non-blocking observations: minor improvements, follow-up items, style preferences,
             or pre-existing issues noticed outside the PR scope. These do not block merge.
 
-            If everything is clean and there are no issues in any category, you still post — a short "All clear" comment with the marker on the first line and `<!-- verdict: pass -->` on the last. See "Required Output" above; not posting is never an option.
+            If everything is clean and there are no issues in any category, still write the file — a
+            short "All clear" review with the marker on the first line and `<!-- verdict: pass -->` on
+            the last. See "Required Output" above; not writing the file is never an option.
 
             ## Verdict
 
-            At the very end of your comment, you MUST include a machine-readable verdict line as an HTML comment:
+            The final line of the file MUST be a machine-readable verdict as an HTML comment:
             - `<!-- verdict: pass -->` if there are NO blocking issues (i.e., no New Issues, Still Open, or Security items that must be fixed before merge)
             - `<!-- verdict: fail -->` if there ARE blocking issues that must be fixed before merge
 
@@ -158,66 +171,57 @@ jobs:
             - SSRF, path traversal, and other OWASP Top 10 issues
 
             ## Tool Usage
-            Use Read, Grep, Glob, and the gh commands to review the code. Do NOT attempt to run
-            security scanners (trivy, bandit, semgrep, npm audit, pip-audit, etc.) — dependency
-            scanning is handled by a separate CI workflow. Focus on manual code review of the diff.
+            Use Read, Grep, Glob, and the read-only gh commands (gh pr diff, gh pr view, gh api) to
+            review the code. Do NOT attempt to run security scanners (trivy, bandit, semgrep, npm
+            audit, pip-audit, etc.) — dependency scanning is handled by a separate CI workflow. Focus
+            on manual code review of the diff.
 
-            Use `gh pr comment` with your Bash tool to post exactly one comment on the PR before exiting. Per "Required Output" above, posting is mandatory on every run.
-            IMPORTANT: Post ONE complete comment. Never post placeholder, partial, or "will update later" comments.
-            Write the full review content directly in the --body argument.
+            Use the `Write` tool to save your full review to `${{ env.REVIEW_FILE }}`. Per "Required
+            Output" above, writing this file is mandatory on every run; do not post a comment yourself.
 
-          claude_args: '--allowed-tools "Write,Read,Grep,Glob,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh api:*)"'
+          claude_args: '--allowed-tools "Write,Read,Grep,Glob,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),Bash(gh api:*)"'
 
-      - name: Ensure review comment was posted
+      - name: Post review comment and gate
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           PR_NUMBER=${{ github.event.pull_request.number }}
-          REPO=${{ github.repository }}
-          MARKER="<!-- claude-combined-review -->"
 
-          FOUND=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-            --paginate \
-            --jq "[.[] | select(.body | contains(\"${MARKER}\"))] | length")
-
-          if [ "$FOUND" = "0" ] || [ -z "$FOUND" ]; then
-            echo "::warning::Review comment was not posted by Claude. Posting fallback."
-            gh pr comment "$PR_NUMBER" --body "$(cat <<'FALLBACK'
-          <!-- claude-combined-review -->
-
-          **Review did not complete successfully.** Claude was unable to post its review
-          (likely due to tool permission denials or a timeout). Please re-run the workflow or review manually.
-
-          <!-- verdict: error -->
-          FALLBACK
-          )"
+          # Derive the verdict from THIS run's output file, not from scraping prior
+          # comments — that is what previously let a stale comment poison the gate.
+          if [ -s "$REVIEW_FILE" ] && grep -q '<!-- verdict:' "$REVIEW_FILE"; then
+            VERDICT=$(grep -oP '<!-- verdict: \K(pass|fail|error)' "$REVIEW_FILE" | tail -1)
+            echo "Posting review from $REVIEW_FILE (verdict: ${VERDICT:-unknown})"
+            gh pr comment "$PR_NUMBER" --body-file "$REVIEW_FILE"
+          else
+            VERDICT=""
           fi
 
-      - name: Review gate
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          PR_NUMBER=${{ github.event.pull_request.number }}
-          REPO=${{ github.repository }}
-
-          echo "=== Fetching CI reviewer comment ==="
-
-          REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-            --paginate \
-            --jq '[.[] | select(.body | contains("<!-- claude-combined-review -->"))] | last | .body // empty')
-
-          VERDICT=$(echo "$REVIEW" | grep -oP '<!-- verdict: \K(pass|fail|error)' | tail -1)
-          if [ -z "$VERDICT" ]; then
-            echo "::error::Review missing verdict line (<!-- verdict: pass/fail -->)"
-            exit 1
-          elif [ "$VERDICT" = "error" ]; then
-            echo "::error::Review infrastructure error — the AI reviewer failed to run. Re-run the 'Claude Reviews' workflow or review manually. This is NOT a code issue."
-            exit 1
-          elif [ "$VERDICT" = "fail" ]; then
-            echo "::error::Review verdict: fail — see review comment for issues to fix"
-            exit 1
+          if [ -z "${VERDICT:-}" ]; then
+            VERDICT=error
+            echo "::warning::Review file missing, empty, or has no verdict. Posting fallback."
+            gh pr comment "$PR_NUMBER" --body "$(printf '%s\n' \
+              '<!-- claude-combined-review -->' \
+              '' \
+              '**Review did not complete successfully.** The AI reviewer did not produce a review file' \
+              '(likely a tool error or timeout). Re-run the '\''Claude Reviews'\'' workflow or review manually.' \
+              '' \
+              '<!-- verdict: error -->')"
           fi
 
-          echo "Review Gate passed."
+          echo "=== Review gate ==="
+          case "$VERDICT" in
+            pass)
+              echo "Review Gate passed."
+              ;;
+            fail)
+              echo "::error::Review verdict: fail — see the review comment for issues to fix."
+              exit 1
+              ;;
+            *)
+              echo "::error::Review infrastructure error — the AI reviewer failed to produce a verdict. Re-run the 'Claude Reviews' workflow or review manually. This is NOT a code issue."
+              exit 1
+              ;;
+          esac
