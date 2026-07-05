@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 
-{% block title %}Campbell Council Meetings{% endblock %}
+{% block title %}{{ city.name }} Council Meetings{% endblock %}
 
 {% block content %}
-<h1>Campbell City Council Meetings</h1>
-<p class="subtitle">Agendas and minutes from the Campbell, CA City Council — automatically summarized.</p>
+<h1>{{ city.display_name }} Meetings</h1>
+<p class="subtitle">Agendas and minutes from the {{ city.display_name }} — automatically summarized.</p>
 
 {% if not meeting_data %}
 <p>No meetings found yet. Check back soon.</p>

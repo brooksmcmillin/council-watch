@@ -1,9 +1,15 @@
 """Tests for per-city configuration threaded through the pipeline modules."""
 
-import pytest
+import datetime as dt
+from email import message_from_string
+from email.header import decode_header, make_header
 
-from council_meetings import notifier, scraper, summarizer
-from council_meetings.config import CityConfig, city
+import pytest
+from sqlalchemy.orm import Session
+
+from council_meetings import notifier, scraper, subscriptions, summarizer
+from council_meetings.config import CityConfig, city, settings
+from council_meetings.models import Document, Meeting
 
 
 def test_defaults_describe_campbell() -> None:
@@ -62,17 +68,67 @@ def test_fetch_year_posts_configured_category_id(monkeypatch: pytest.MonkeyPatch
     assert captured["data"] == {"year": "2024", "catID": "42"}
 
 
-def test_email_subject_uses_configured_city_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    from datetime import date
-    from types import SimpleNamespace
+class _FakeSMTP:
+    """Records sendmail calls; usable as a context manager like smtplib.SMTP."""
 
+    instances: list["_FakeSMTP"] = []
+
+    def __init__(self, host: str, port: int) -> None:
+        self.sent: list[tuple[str, list[str], str]] = []
+        _FakeSMTP.instances.append(self)
+
+    def __enter__(self) -> "_FakeSMTP":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def starttls(self) -> None:
+        pass
+
+    def login(self, user: str, password: str) -> None:
+        pass
+
+    def sendmail(self, from_addr: str, to_addrs: list[str], msg: str) -> None:
+        self.sent.append((from_addr, to_addrs, msg))
+
+
+def test_email_subject_uses_configured_city_name(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real Subject header sent by send_email reflects the configured city."""
     monkeypatch.setattr(city, "name", "Springfield")
+    monkeypatch.setattr(settings, "smtp_host", "smtp.example.com")
+    monkeypatch.setattr(settings, "smtp_user", "")
+    monkeypatch.setattr(settings, "email_from", "bot@example.com")
+    monkeypatch.setattr(settings, "email_to", "admin@example.com")
+    monkeypatch.setattr(settings, "app_base_url", "https://site.example")
+    _FakeSMTP.instances = []
+    monkeypatch.setattr(notifier.smtplib, "SMTP", _FakeSMTP)
 
-    meeting = SimpleNamespace(title="Regular Meeting", date=date(2025, 1, 2))
-    doc = SimpleNamespace(doc_type="agenda", revised_at=None)
-
-    label = notifier._doc_label(doc)  # type: ignore[arg-type]
-    subject = (
-        f"{city.name} Council: {meeting.title} — {label} ({meeting.date.strftime('%m/%d/%Y')})"
+    meeting = Meeting(
+        date=dt.date(2025, 9, 16),
+        title="Regular Meeting",
+        civicplus_id="3145",
+        url_date_slug="_09162025-3145",
     )
-    assert subject.startswith("Springfield Council:")
+    db_session.add(meeting)
+    db_session.flush()
+    doc = Document(
+        meeting_id=meeting.id,
+        doc_type="agenda",
+        source_url="/AgendaCenter/ViewFile/Agenda/_09162025-3145",
+        summary="A summary of the meeting.",
+    )
+    db_session.add(doc)
+    db_session.flush()
+    subscriptions.subscribe(db_session, "sub@example.com")
+
+    assert notifier.send_email(meeting, doc, db_session) is True
+
+    _, _, body = _FakeSMTP.instances[-1].sent[0]
+    # The Subject is MIME encoded-word wrapped (contains an em-dash), so decode
+    # it before asserting rather than substring-matching the raw header.
+    msg = message_from_string(body)
+    subject = str(make_header(decode_header(msg["Subject"])))
+    assert subject.startswith("Springfield Council: Regular Meeting")

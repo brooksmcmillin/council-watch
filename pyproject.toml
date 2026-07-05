@@ -1,7 +1,7 @@
 [project]
 name = "council-meetings"
 version = "0.1.0"
-description = "Campbell City Council meeting monitor — scrapes agendas/minutes, summarizes with Claude, notifies via email and Bluesky"
+description = "CivicPlus city council meeting monitor — scrapes agendas/minutes, summarizes with Claude, notifies via email and Bluesky"
 readme = "README.md"
 authors = [
     { name = "Brooks McMillin", email = "brooks@brooksmcmillin.com" }
