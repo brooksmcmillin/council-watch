@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from council_meetings import subscriptions
+from council_meetings.config import city
 from council_meetings.db import get_db, init_db
 from council_meetings.models import Document, Meeting
 
@@ -32,11 +33,15 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown(wait=False)
 
 
-app = FastAPI(title="Campbell Council Meetings", lifespan=lifespan)
+app = FastAPI(title=f"{city.display_name} Meetings", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+# Expose the configured city to every template (including those rendered without
+# explicit context, e.g. about/subscribe/404) so branding, links, and the
+# affiliation disclaimer follow CITY_* config instead of being hard-coded.
+templates.env.globals["city"] = city
 
-BASE_URL = "https://www.campbellca.gov"
+BASE_URL = city.base_url
 
 
 @app.get("/", response_class=HTMLResponse)

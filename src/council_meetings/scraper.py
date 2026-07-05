@@ -1,4 +1,8 @@
-"""Scrape Campbell City Council agendas and minutes from CivicPlus."""
+"""Scrape a CivicPlus city council's agendas and minutes.
+
+The city being monitored is configured via :data:`council_meetings.config.city`
+(Campbell, CA by default), so no URLs or category ids are hard-coded here.
+"""
 
 import hashlib
 import logging
@@ -11,16 +15,12 @@ import httpx
 from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
 
-from council_meetings.config import settings
+from council_meetings.config import city, settings
 from council_meetings.db import SessionLocal
 from council_meetings.models import Document, Meeting, ScrapeLog
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://www.campbellca.gov"
-AGENDA_CENTER = f"{BASE_URL}/AgendaCenter/City-Council-10"
-BACKFILL_URL = f"{BASE_URL}/AgendaCenter/UpdateCategoryList"
-USER_AGENT = "CampbellCouncilMonitor/1.0 (+https://github.com/brooksmcmillin/council-meetings)"
 DOWNLOAD_DELAY = 2  # seconds between PDF downloads
 
 # Pattern: MMDDYYYY-ID (optionally prefixed with _ or h4)
@@ -30,7 +30,7 @@ SLUG_RE = re.compile(r"(\d{8})-(\d+)")
 def _client() -> httpx.Client:
     return httpx.Client(
         headers={
-            "User-Agent": USER_AGENT,
+            "User-Agent": city.user_agent,
             # Force identity encoding so a GET's stored byte size (len of the
             # decoded body) and a HEAD's raw Content-Length are always in the
             # same units, keeping the size pre-check in ensure_document exact.
@@ -121,7 +121,7 @@ def parse_meetings_html(html: str) -> list[dict]:
 
 def fetch_current_year(client: httpx.Client) -> str:
     """Fetch the main agenda page (current year)."""
-    resp = client.get(AGENDA_CENTER)
+    resp = client.get(city.agenda_center_url)
     resp.raise_for_status()
     return resp.text
 
@@ -129,8 +129,8 @@ def fetch_current_year(client: httpx.Client) -> str:
 def fetch_year(client: httpx.Client, year: int) -> str:
     """Fetch meetings for a specific year via the AJAX backfill endpoint."""
     resp = client.post(
-        BACKFILL_URL,
-        data={"year": str(year), "catID": "10"},
+        city.backfill_url,
+        data={"year": str(year), "catID": city.category_id},
         headers={"X-Requested-With": "XMLHttpRequest"},
     )
     resp.raise_for_status()
@@ -140,7 +140,7 @@ def fetch_year(client: httpx.Client, year: int) -> str:
 def download_pdf(client: httpx.Client, relative_url: str, dest_path: Path) -> tuple[str, int]:
     """Download a PDF and return its (SHA-256 hash, byte size)."""
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    url = f"{BASE_URL}{relative_url}"
+    url = f"{city.base_url}{relative_url}"
     resp = client.get(url)
     resp.raise_for_status()
     dest_path.write_bytes(resp.content)
@@ -157,7 +157,7 @@ def head_content_length(client: httpx.Client, relative_url: str) -> int | None:
     validators, so a HEAD size check is the only body-free freshness signal
     available.
     """
-    url = f"{BASE_URL}{relative_url}"
+    url = f"{city.base_url}{relative_url}"
     try:
         resp = client.head(url)
         resp.raise_for_status()
