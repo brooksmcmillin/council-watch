@@ -36,6 +36,21 @@ def test_city_overridable_via_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.category_id == "42"
 
 
+def test_ignores_non_city_keys_in_shared_env_file(tmp_path) -> None:
+    """The shared .env holds Settings keys (ANTHROPIC_API_KEY, SMTP_*, ...);
+    CityConfig reads the same file and must ignore them rather than raise on
+    extras (regression: previously crashed app startup with a .env present)."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ANTHROPIC_API_KEY=sk-test\n"
+        "SMTP_PORT=587\n"
+        "DATABASE_URL=sqlite:///data/council.db\n"
+        "CITY_NAME=Springfield\n"
+    )
+    cfg = CityConfig(_env_file=str(env_file))  # type: ignore[call-arg]
+    assert cfg.name == "Springfield"
+
+
 def test_summarizer_prompt_uses_configured_location(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(city, "location", "Springfield, Illinois")
     for doc_type in ("agenda", "minutes"):

@@ -14,6 +14,9 @@ class CityConfig(BaseSettings):
         "env_prefix": "CITY_",
         "env_file": ".env",
         "env_file_encoding": "utf-8",
+        # The shared .env holds non-CITY_ keys (ANTHROPIC_API_KEY, SMTP_*, ...)
+        # meant for Settings; ignore them here instead of erroring on extras.
+        "extra": "ignore",
     }
 
     # Short name used in email subjects and the bot User-Agent (e.g. "Campbell").
