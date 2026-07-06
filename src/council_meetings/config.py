@@ -1,7 +1,24 @@
 from pydantic_settings import BaseSettings
 
 
-class CityConfig(BaseSettings):
+class _SharedEnvSettings(BaseSettings):
+    """Base for the two settings models that co-read the shared ``.env`` file.
+
+    ``Settings`` (unprefixed) and ``CityConfig`` (``CITY_`` prefix) both parse
+    the *entire* dotenv file, so each sees the other's keys. Ignore unmatched
+    keys instead of pydantic-settings' default ``extra="forbid"``, which would
+    otherwise crash at import time (``settings``/``city`` are built eagerly
+    below) the moment a ``.env`` holds the sibling model's variables.
+    """
+
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
+
+
+class CityConfig(_SharedEnvSettings):
     """Per-city configuration for the CivicPlus source being monitored.
 
     Everything Campbell-specific lives here so additional CivicPlus cities can
@@ -10,11 +27,7 @@ class CityConfig(BaseSettings):
     ``CITY_CATEGORY_ID``). Defaults describe the City of Campbell, CA.
     """
 
-    model_config = {
-        "env_prefix": "CITY_",
-        "env_file": ".env",
-        "env_file_encoding": "utf-8",
-    }
+    model_config = {**_SharedEnvSettings.model_config, "env_prefix": "CITY_"}
 
     # Short name used in email subjects and the bot User-Agent (e.g. "Campbell").
     name: str = "Campbell"
@@ -45,9 +58,7 @@ class CityConfig(BaseSettings):
         return f"{self.base_url}/AgendaCenter/UpdateCategoryList"
 
 
-class Settings(BaseSettings):
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
-
+class Settings(_SharedEnvSettings):
     # Required
     anthropic_api_key: str = ""
 

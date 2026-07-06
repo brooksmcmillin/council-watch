@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from council_meetings import notifier, scraper, subscriptions, summarizer
-from council_meetings.config import CityConfig, city, settings
+from council_meetings.config import CityConfig, Settings, city, settings
 from council_meetings.models import Document, Meeting
 
 
@@ -34,6 +34,33 @@ def test_city_overridable_via_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.name == "Springfield"
     assert cfg.base_url == "https://springfield.example.gov"
     assert cfg.category_id == "42"
+
+
+def test_ignores_non_city_keys_in_shared_env_file(tmp_path) -> None:
+    """The shared .env holds Settings keys (ANTHROPIC_API_KEY, SMTP_*, ...);
+    CityConfig reads the same file and must ignore them rather than raise on
+    extras (regression: previously crashed app startup with a .env present)."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ANTHROPIC_API_KEY=sk-test\n"
+        "SMTP_PORT=587\n"
+        "DATABASE_URL=sqlite:///data/council.db\n"
+        "CITY_NAME=Springfield\n"
+    )
+    cfg = CityConfig(_env_file=str(env_file))  # type: ignore[call-arg]
+    assert cfg.name == "Springfield"
+
+
+def test_settings_ignores_city_keys_in_shared_env_file(tmp_path) -> None:
+    """Settings reads the same shared .env and must ignore the CITY_ keys used
+    to onboard a city (CITY_BASE_URL, ...) rather than raise on extras — the
+    symmetric direction of the CityConfig regression above."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "CITY_NAME=Springfield\nCITY_BASE_URL=https://springfield.example.gov\nSMTP_PORT=2525\n"
+    )
+    cfg = Settings(_env_file=str(env_file))  # type: ignore[call-arg]
+    assert cfg.smtp_port == 2525
 
 
 def test_summarizer_prompt_uses_configured_location(monkeypatch: pytest.MonkeyPatch) -> None:
