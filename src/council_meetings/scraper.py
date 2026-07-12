@@ -141,10 +141,24 @@ def download_pdf(client: httpx.Client, relative_url: str, dest_path: Path) -> tu
     """Download a PDF and return its (SHA-256 hash, byte size)."""
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     url = f"{city.base_url}{relative_url}"
-    resp = client.get(url)
-    resp.raise_for_status()
-    dest_path.write_bytes(resp.content)
-    return hashlib.sha256(resp.content).hexdigest(), len(resp.content)
+    temp_path = dest_path.with_suffix(f"{dest_path.suffix}.part")
+    digest = hashlib.sha256()
+    size = 0
+
+    try:
+        with client.stream("GET", url) as resp:
+            resp.raise_for_status()
+            with temp_path.open("wb") as output:
+                for chunk in resp.iter_bytes():
+                    output.write(chunk)
+                    digest.update(chunk)
+                    size += len(chunk)
+        temp_path.replace(dest_path)
+    except BaseException:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+    return digest.hexdigest(), size
 
 
 def head_content_length(client: httpx.Client, relative_url: str) -> int | None:
