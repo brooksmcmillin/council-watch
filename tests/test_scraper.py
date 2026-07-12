@@ -145,3 +145,4 @@ def test_download_pdf_returns_hash_and_size(tmp_path) -> None:
     assert pdf_hash == _sha(content)
     assert size == len(content)
     assert (tmp_path / "out.pdf").read_bytes() == content
+    assert not (tmp_path / "out.pdf.part").exists()

@@ -1,6 +1,5 @@
 """Summarize council meeting PDFs using Claude API with native PDF support."""
 
-import base64
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
@@ -52,32 +51,34 @@ def summarize_pdf(pdf_path: str, doc_type: str) -> str:
     if not path.exists():
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
 
-    pdf_bytes = path.read_bytes()
-    pdf_b64 = base64.standard_b64encode(pdf_bytes).decode("ascii")
-
     prompt = _prompt_for(doc_type)
 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    message = client.messages.create(
-        model=settings.summarization_model,
-        max_tokens=2048,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "document",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "application/pdf",
-                            "data": pdf_b64,
+    with path.open("rb") as pdf_file:
+        uploaded = client.beta.files.upload(file=pdf_file)
+
+    try:
+        message = client.beta.messages.create(
+            model=settings.summarization_model,
+            max_tokens=2048,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "file",
+                                "file_id": uploaded.id,
+                            },
                         },
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ],
-    )
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
+        )
+    finally:
+        client.beta.files.delete(uploaded.id)
 
     block = message.content[0]
     if not isinstance(block, TextBlock):

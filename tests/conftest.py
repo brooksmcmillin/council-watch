@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from types import TracebackType
 
 import httpx
 import pytest
@@ -29,6 +30,22 @@ class FakeResponse:
     def raise_for_status(self) -> None:  # pragma: no cover - never errors in tests
         return None
 
+    def iter_bytes(self) -> Iterator[bytes]:
+        midpoint = len(self.content) // 2
+        yield self.content[:midpoint]
+        yield self.content[midpoint:]
+
+    def __enter__(self) -> "FakeResponse":
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        return None
+
 
 class FakeClient:
     """Minimal stand-in for httpx.Client recording HEAD/GET usage."""
@@ -53,6 +70,10 @@ class FakeClient:
         if self._get_error:
             raise httpx.HTTPError("boom")
         return FakeResponse(content=self._get_content)
+
+    def stream(self, method: str, url: str) -> FakeResponse:
+        assert method == "GET"
+        return self.get(url)
 
     def head(self, url: str) -> FakeResponse:
         self.head_calls += 1
