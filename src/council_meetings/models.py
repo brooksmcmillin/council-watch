@@ -65,6 +65,9 @@ class Subscriber(Base):
     email: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     # Opaque per-subscriber token embedded in one-click unsubscribe links.
     unsubscribe_token: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    # New signups must prove control of the mailbox before receiving meeting mail.
+    confirmation_token: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    confirmed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False

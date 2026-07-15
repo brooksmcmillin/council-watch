@@ -14,6 +14,7 @@ from council_meetings import subscriptions
 from council_meetings.config import city
 from council_meetings.db import get_db, init_db
 from council_meetings.models import Document, Meeting
+from council_meetings.notifier import send_confirmation_email
 
 logger = logging.getLogger(__name__)
 
@@ -109,16 +110,42 @@ def subscribe_submit(
             status_code=400,
         )
 
-    _, status = subscriptions.subscribe(db, email)
-    if status == "already_active":
+    subscriber, status = subscriptions.subscribe(db, email)
+    if status in {"created", "reactivated"} and not send_confirmation_email(
+        subscriber.email, subscriber.confirmation_token
+    ):
+        subscriptions.cancel_pending_confirmation(db, subscriber)
+        return templates.TemplateResponse(
+            request,
+            "subscribe.html",
+            {"error": "We couldn't send a confirmation email. Please try again later."},
+            status_code=503,
+        )
+
+    if status == "pending_confirmation":
+        message = "A confirmation email has already been sent. Check your inbox or spam folder."
+    elif status == "already_confirmed":
         message = "You're already subscribed — no changes made."
     else:
-        message = "You're subscribed! You'll get an email when new summaries are posted."
+        message = "Check your email to confirm your subscription."
 
+    return templates.TemplateResponse(request, "subscribe.html", {"success": message})
+
+
+@app.get("/confirm/{token}", response_class=HTMLResponse)
+def confirm_subscription(token: str, request: Request, db: Session = Depends(get_db)):
+    subscriber = subscriptions.confirm(db, token)
+    if subscriber is None:
+        return templates.TemplateResponse(
+            request,
+            "subscribe.html",
+            {"error": "That confirmation link is not valid."},
+            status_code=404,
+        )
     return templates.TemplateResponse(
         request,
         "subscribe.html",
-        {"success": message},
+        {"success": "Your subscription is confirmed. You'll receive new summaries by email."},
     )
 
 

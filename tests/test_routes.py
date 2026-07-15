@@ -6,9 +6,15 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from council_meetings import main as main_module
 from council_meetings.db import get_db
 from council_meetings.main import app
 from council_meetings.models import Base, Subscriber
+
+
+@pytest.fixture(autouse=True)
+def _confirmation_email(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(main_module, "send_confirmation_email", lambda _address, _token: True)
 
 
 @pytest.fixture
@@ -47,17 +53,77 @@ def test_subscribe_form_renders(client: TestClient) -> None:
     assert "Subscribe" in resp.text
 
 
-def test_subscribe_submit_creates_subscriber(client: TestClient) -> None:
+def test_subscribe_submit_sends_one_confirmation(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        main_module,
+        "send_confirmation_email",
+        lambda address, token: sent.append((address, token)) or True,
+    )
+
     resp = client.post("/subscribe", data={"email": "new@example.com"})
+    duplicate = client.post("/subscribe", data={"email": "new@example.com"})
+
     assert resp.status_code == 200
-    assert "subscribed" in resp.text.lower()
-    assert _subscriber(client, "new@example.com") is not None
+    assert "check your email" in resp.text.lower()
+    assert duplicate.status_code == 200
+    assert "already been sent" in duplicate.text.lower()
+    subscriber = _subscriber(client, "new@example.com")
+    assert subscriber.confirmed is False
+    assert sent == [(subscriber.email, subscriber.confirmation_token)]
 
 
 def test_subscribe_rejects_invalid_email(client: TestClient) -> None:
     resp = client.post("/subscribe", data={"email": "not-an-email"})
     assert resp.status_code == 400
     assert "valid email" in resp.text.lower()
+
+
+def test_failed_confirmation_send_can_be_retried(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(main_module, "send_confirmation_email", lambda _address, _token: False)
+
+    failed = client.post("/subscribe", data={"email": "retry@example.com"})
+    first_token = _subscriber(client, "retry@example.com").confirmation_token
+
+    assert failed.status_code == 503
+    assert _subscriber(client, "retry@example.com").active is False
+
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        main_module,
+        "send_confirmation_email",
+        lambda address, token: sent.append((address, token)) or True,
+    )
+    retried = client.post("/subscribe", data={"email": "retry@example.com"})
+    subscriber = _subscriber(client, "retry@example.com")
+
+    assert retried.status_code == 200
+    assert subscriber.active is True
+    assert subscriber.confirmation_token != first_token
+    assert sent == [(subscriber.email, subscriber.confirmation_token)]
+
+
+def test_confirm_route_activates_subscription(client: TestClient) -> None:
+    client.post("/subscribe", data={"email": "confirm@example.com"})
+    token = _subscriber(client, "confirm@example.com").confirmation_token
+
+    resp = client.get(f"/confirm/{token}")
+
+    assert resp.status_code == 200
+    assert "confirmed" in resp.text.lower()
+    assert _subscriber(client, "confirm@example.com").confirmed is True
+
+    duplicate = client.post("/subscribe", data={"email": "confirm@example.com"})
+    assert "already subscribed" in duplicate.text.lower()
+
+
+def test_confirm_route_unknown_token_404(client: TestClient) -> None:
+    resp = client.get("/confirm/bogus-token")
+    assert resp.status_code == 404
 
 
 def test_unsubscribe_get_is_read_only(client: TestClient) -> None:
