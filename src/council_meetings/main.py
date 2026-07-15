@@ -122,11 +122,14 @@ def subscribe_submit(
             status_code=503,
         )
 
-    return templates.TemplateResponse(
-        request,
-        "subscribe.html",
-        {"success": "Check your email to confirm your subscription."},
-    )
+    if status == "pending_confirmation":
+        message = "A confirmation email has already been sent. Check your inbox or spam folder."
+    elif status == "already_confirmed":
+        message = "You're already subscribed — no changes made."
+    else:
+        message = "Check your email to confirm your subscription."
+
+    return templates.TemplateResponse(request, "subscribe.html", {"success": message})
 
 
 @app.get("/confirm/{token}", response_class=HTMLResponse)

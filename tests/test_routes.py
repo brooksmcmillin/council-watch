@@ -69,6 +69,7 @@ def test_subscribe_submit_sends_one_confirmation(
     assert resp.status_code == 200
     assert "check your email" in resp.text.lower()
     assert duplicate.status_code == 200
+    assert "already been sent" in duplicate.text.lower()
     subscriber = _subscriber(client, "new@example.com")
     assert subscriber.confirmed is False
     assert sent == [(subscriber.email, subscriber.confirmation_token)]
@@ -115,6 +116,9 @@ def test_confirm_route_activates_subscription(client: TestClient) -> None:
     assert resp.status_code == 200
     assert "confirmed" in resp.text.lower()
     assert _subscriber(client, "confirm@example.com").confirmed is True
+
+    duplicate = client.post("/subscribe", data={"email": "confirm@example.com"})
+    assert "already subscribed" in duplicate.text.lower()
 
 
 def test_confirm_route_unknown_token_404(client: TestClient) -> None:
