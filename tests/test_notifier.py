@@ -76,7 +76,8 @@ def _fake_smtp(monkeypatch: pytest.MonkeyPatch) -> type[FakeSMTP]:
 def test_recipients_combine_subscribers_and_admin(
     db_session: Session, _email_config: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    subscriptions.subscribe(db_session, "sub@example.com")
+    subscriber, _ = subscriptions.subscribe(db_session, "sub@example.com")
+    subscriptions.confirm(db_session, subscriber.confirmation_token)
     monkeypatch.setattr(settings, "email_to", "admin@example.com, sub@example.com")
 
     recipients = notifier._email_recipients(db_session)
@@ -97,6 +98,7 @@ def test_send_email_personalizes_unsubscribe(
 ) -> None:
     monkeypatch.setattr(settings, "email_to", "admin@example.com")
     sub, _ = subscriptions.subscribe(db_session, "sub@example.com")
+    subscriptions.confirm(db_session, sub.confirmation_token)
     meeting, doc = meeting_and_doc
 
     assert notifier.send_email(meeting, doc, db_session) is True
@@ -114,6 +116,19 @@ def test_send_email_personalizes_unsubscribe(
     # Admin message has no unsubscribe machinery
     admin_msg = by_to["admin@example.com"]
     assert "unsubscribe" not in admin_msg.lower()
+
+
+def test_send_confirmation_email(
+    _email_config: None,
+    _fake_smtp: type[FakeSMTP],
+) -> None:
+    assert notifier.send_confirmation_email("new@example.com", "confirmation-token") is True
+
+    smtp = FakeSMTP.instances[-1]
+    assert len(smtp.sent) == 1
+    _, recipients, body = smtp.sent[0]
+    assert recipients == ["new@example.com"]
+    assert "https://site.example/confirm/confirmation-token" in body
 
 
 def test_send_email_no_recipients_is_satisfied(
@@ -134,7 +149,8 @@ def test_send_email_smtp_failure_returns_false(
     _email_config: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    subscriptions.subscribe(db_session, "sub@example.com")
+    subscriber, _ = subscriptions.subscribe(db_session, "sub@example.com")
+    subscriptions.confirm(db_session, subscriber.confirmation_token)
 
     def _boom(host: str, port: int) -> None:
         raise OSError("connection refused")

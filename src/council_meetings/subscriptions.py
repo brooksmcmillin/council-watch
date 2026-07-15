@@ -22,18 +22,23 @@ def normalize_email(email: str) -> str:
 
 
 def subscribe(db: Session, email: str) -> tuple[Subscriber, str]:
-    """Create or reactivate a subscriber.
+    """Create an unconfirmed subscriber or start confirmation again.
 
     Returns the subscriber and one of the status strings ``"created"``,
-    ``"reactivated"``, or ``"already_active"`` so callers can tailor the
-    confirmation message.
+    ``"reactivated"``, ``"pending_confirmation"``, or ``"already_confirmed"``.
+    Only created/reactivated rows need a confirmation email; returning a
+    separate pending status prevents repeated form submissions from becoming
+    a confirmation-email mailbomb.
     """
     email = normalize_email(email)
     existing = db.query(Subscriber).filter_by(email=email).first()
     if existing is not None:
         if existing.active:
-            return existing, "already_active"
+            status = "already_confirmed" if existing.confirmed else "pending_confirmation"
+            return existing, status
         existing.active = True
+        existing.confirmed = False
+        existing.confirmation_token = secrets.token_urlsafe(32)
         existing.unsubscribed_at = None
         db.commit()
         return existing, "reactivated"
@@ -41,11 +46,35 @@ def subscribe(db: Session, email: str) -> tuple[Subscriber, str]:
     subscriber = Subscriber(
         email=email,
         unsubscribe_token=secrets.token_urlsafe(32),
+        confirmation_token=secrets.token_urlsafe(32),
+        confirmed=False,
         active=True,
     )
     db.add(subscriber)
     db.commit()
     return subscriber, "created"
+
+
+def confirm(db: Session, token: str) -> Subscriber | None:
+    """Confirm the subscriber owning ``token`` and return it.
+
+    Confirmation is idempotent. An unknown or rotated token returns ``None``.
+    """
+    subscriber = db.query(Subscriber).filter_by(confirmation_token=token, active=True).first()
+    if subscriber is None:
+        return None
+    if not subscriber.confirmed:
+        subscriber.confirmed = True
+        db.commit()
+    return subscriber
+
+
+def cancel_pending_confirmation(db: Session, subscriber: Subscriber) -> None:
+    """Deactivate a pending attempt whose confirmation message was not sent."""
+    if subscriber.active and not subscriber.confirmed:
+        subscriber.active = False
+        subscriber.unsubscribed_at = dt.datetime.now(dt.UTC)
+        db.commit()
 
 
 def find_by_token(db: Session, token: str) -> Subscriber | None:
@@ -70,4 +99,4 @@ def unsubscribe(db: Session, token: str) -> Subscriber | None:
 
 
 def active_subscribers(db: Session) -> list[Subscriber]:
-    return db.query(Subscriber).filter_by(active=True).order_by(Subscriber.id).all()
+    return db.query(Subscriber).filter_by(active=True, confirmed=True).order_by(Subscriber.id).all()

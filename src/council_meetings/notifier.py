@@ -26,6 +26,51 @@ def _unsubscribe_url(token: str) -> str:
     return f"{base}/unsubscribe/{token}"
 
 
+def _confirmation_url(token: str) -> str:
+    base = settings.app_base_url.rstrip("/")
+    return f"{base}/confirm/{token}"
+
+
+def send_confirmation_email(address: str, token: str) -> bool:
+    """Send the single opt-in message for a newly pending subscription."""
+    if not settings.email_enabled:
+        logger.warning("Cannot send subscription confirmation: SMTP is not configured")
+        return False
+
+    confirmation_url = _confirmation_url(token)
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"Confirm your {city.name} Council email subscription"
+    msg["From"] = settings.email_from
+    msg["To"] = address
+    msg.attach(
+        MIMEText(
+            f"Confirm your subscription to {city.name} Council meeting summaries:\n"
+            f"{confirmation_url}\n\n"
+            "If you did not request this, you can ignore this email.",
+            "plain",
+        )
+    )
+    msg.attach(
+        MIMEText(
+            f'<p><a href="{confirmation_url}">Confirm your subscription</a> to '
+            f"{city.name} Council meeting summaries.</p>"
+            "<p>If you did not request this, you can ignore this email.</p>",
+            "html",
+        )
+    )
+
+    try:
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
+            server.starttls()
+            if settings.smtp_user:
+                server.login(settings.smtp_user, settings.smtp_password)
+            server.sendmail(settings.email_from, [address], msg.as_string())
+    except Exception as e:
+        logger.error("Failed to send subscription confirmation to %s: %s", address, e)
+        return False
+    return True
+
+
 def _build_email_html(meeting: Meeting, doc: Document, unsubscribe_url: str | None) -> str:
     doc_label = _doc_label(doc)
     base = settings.app_base_url.rstrip("/")
