@@ -2,6 +2,7 @@
 
 import logging
 from contextlib import asynccontextmanager
+from ipaddress import ip_address
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, Request
@@ -15,6 +16,7 @@ from council_meetings.config import city
 from council_meetings.db import get_db, init_db
 from council_meetings.models import Document, Meeting
 from council_meetings.notifier import send_confirmation_email
+from council_meetings.rate_limit import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,39 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 templates.env.globals["city"] = city
 
 BASE_URL = city.base_url
+
+# A signup can send email, so keep its allowance deliberately small. Confirmation
+# only performs a token lookup and needs a larger allowance for mail scanners and
+# shared networks. These counters are process-local by design: production runs one
+# replica, and losing the counters during a deploy is an acceptable tradeoff here.
+subscribe_limiter = RateLimiter(limit=5, window_seconds=60 * 60)
+confirm_limiter = RateLimiter(limit=30, window_seconds=60)
+
+
+def _client_ip(request: Request) -> str:
+    """Return the normalized visitor IP supplied by the trusted Cloudflare edge."""
+    # Production is proxied by Cloudflare and Traefik, so request.client is the
+    # ingress pod. Cloudflare overwrites CF-Connecting-IP at the edge; local/direct
+    # deployments fall back to the socket peer.
+    candidate = request.headers.get("cf-connecting-ip")
+    if candidate is None and request.client is not None:
+        candidate = request.client.host
+    if candidate is None:
+        return "unknown"
+    try:
+        return ip_address(candidate.strip()).compressed
+    except ValueError:
+        return request.client.host if request.client is not None else "unknown"
+
+
+def _rate_limit_error(request: Request, retry_after: int) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "subscribe.html",
+        {"error": "Too many requests. Please try again later."},
+        status_code=429,
+        headers={"Retry-After": str(retry_after)},
+    )
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -101,6 +136,10 @@ def subscribe_submit(
     email: str = Form(...),
     db: Session = Depends(get_db),
 ):
+    allowed, retry_after = subscribe_limiter.check(_client_ip(request))
+    if not allowed:
+        return _rate_limit_error(request, retry_after)
+
     email = email.strip()
     if not subscriptions.is_valid_email(email):
         return templates.TemplateResponse(
@@ -134,6 +173,10 @@ def subscribe_submit(
 
 @app.get("/confirm/{token}", response_class=HTMLResponse)
 def confirm_subscription(token: str, request: Request, db: Session = Depends(get_db)):
+    allowed, retry_after = confirm_limiter.check(_client_ip(request))
+    if not allowed:
+        return _rate_limit_error(request, retry_after)
+
     subscriber = subscriptions.confirm(db, token)
     if subscriber is None:
         return templates.TemplateResponse(
