@@ -15,6 +15,8 @@ from council_meetings.models import Base, Subscriber
 @pytest.fixture(autouse=True)
 def _confirmation_email(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(main_module, "send_confirmation_email", lambda _address, _token: True)
+    main_module.subscribe_limiter.reset()
+    main_module.confirm_limiter.reset()
 
 
 @pytest.fixture
@@ -81,6 +83,55 @@ def test_subscribe_rejects_invalid_email(client: TestClient) -> None:
     assert "valid email" in resp.text.lower()
 
 
+def test_subscribe_burst_from_one_ip_is_throttled(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    headers = {"CF-Connecting-IP": "203.0.113.10"}
+    sent: list[str] = []
+    monkeypatch.setattr(
+        main_module,
+        "send_confirmation_email",
+        lambda address, _token: sent.append(address) or True,
+    )
+
+    for request_number in range(main_module.subscribe_limiter.limit):
+        response = client.post(
+            "/subscribe",
+            data={"email": f"burst-{request_number}@example.com"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+    throttled = client.post(
+        "/subscribe",
+        data={"email": "one-too-many@example.com"},
+        headers=headers,
+    )
+
+    assert throttled.status_code == 429
+    assert throttled.headers["Retry-After"] == "3600"
+    assert "too many requests" in throttled.text.lower()
+    assert _subscriber(client, "one-too-many@example.com") is None
+    assert len(sent) == main_module.subscribe_limiter.limit
+
+
+def test_subscribe_rate_limit_is_per_ip(client: TestClient) -> None:
+    for request_number in range(main_module.subscribe_limiter.limit):
+        client.post(
+            "/subscribe",
+            data={"email": f"first-ip-{request_number}@example.com"},
+            headers={"CF-Connecting-IP": "203.0.113.20"},
+        )
+
+    response = client.post(
+        "/subscribe",
+        data={"email": "second-ip@example.com"},
+        headers={"CF-Connecting-IP": "203.0.113.21"},
+    )
+
+    assert response.status_code == 200
+
+
 def test_failed_confirmation_send_can_be_retried(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -124,6 +175,19 @@ def test_confirm_route_activates_subscription(client: TestClient) -> None:
 def test_confirm_route_unknown_token_404(client: TestClient) -> None:
     resp = client.get("/confirm/bogus-token")
     assert resp.status_code == 404
+
+
+def test_confirm_burst_from_one_ip_is_throttled(client: TestClient) -> None:
+    headers = {"CF-Connecting-IP": "2001:db8::1"}
+
+    for _ in range(main_module.confirm_limiter.limit):
+        response = client.get("/confirm/bogus-token", headers=headers)
+        assert response.status_code == 404
+
+    throttled = client.get("/confirm/bogus-token", headers=headers)
+
+    assert throttled.status_code == 429
+    assert throttled.headers["Retry-After"] == "60"
 
 
 def test_unsubscribe_get_is_read_only(client: TestClient) -> None:
