@@ -1,5 +1,6 @@
 import datetime as dt
 from collections.abc import Iterator
+from urllib.parse import urlsplit
 
 import pytest
 from bs4 import BeautifulSoup
@@ -9,9 +10,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from council_meetings import main as main_module
+from council_meetings import scraper
 from council_meetings.db import get_db
+from council_meetings.escribe import parse_meeting
 from council_meetings.main import app
 from council_meetings.models import Base, Document, Meeting, Subscriber
+from council_meetings.notifier import _build_email_html
 
 
 @pytest.fixture(autouse=True)
@@ -289,3 +293,117 @@ def test_unsubscribe_post_deactivates(client: TestClient) -> None:
 def test_unsubscribe_post_unknown_token_404(client: TestClient) -> None:
     resp = client.post("/unsubscribe/bogus-token")
     assert resp.status_code == 404
+
+
+@pytest.mark.parametrize("doc_type", ["agenda", "minutes"])
+def test_html_source_links_and_limitations(
+    client: TestClient, meeting_id: int, doc_type: str
+) -> None:
+    source = "https://pub-campbell.escribemeetings.com/Meeting.aspx?Id=fixture&Agenda=Agenda"
+    for db in app.dependency_overrides[get_db]():
+        db.add(
+            Document(
+                meeting_id=meeting_id,
+                doc_type=doc_type,
+                source_url=source,
+                text_content="Public HTML",
+                summary="Plain <b>summary</b>",
+            )
+        )
+        db.commit()
+    for path in ["/", f"/meeting/{meeting_id}"]:
+        response = client.get(path)
+        assert response.status_code == 200
+        soup = BeautifulSoup(response.text, "html.parser")
+        links = soup.select(".meeting-links a")
+        assert any(link.get("href") == source for link in links)
+        assert "campbellca.govhttps" not in response.text
+        assert "PDF" not in " ".join(link.get_text() for link in links)
+        if path != "/" or doc_type == "agenda":
+            assert "linked attachments and staff reports are not included" in soup.get_text()
+        assert soup.select_one(".meeting-card b, .meeting-detail b") is None
+
+
+@pytest.mark.parametrize(
+    "unsafe",
+    [
+        "javascript:alert(1)",
+        " JaVaScRiPt:alert(1)",
+        "java\tscript:alert(1)",
+        "data:text/html,<svg/onload=alert(1)>",
+        "vbscript:msgbox(1)",
+        "file:///etc/passwd",
+        "https://[",
+    ],
+)
+def test_calendar_and_saved_source_links_are_inert(client: TestClient, unsafe: str) -> None:
+    record = {
+        "MeetingType": "City Council Regular Meeting",
+        "StartDate": "2026/11/08 19:00:00",
+        "ID": "fdd357dd-6794-4d51-8709-ff788aeb167e",
+        "MeetingDocumentLink": [
+            {"Type": kind, "Format": fmt, "Url": unsafe}
+            for kind, fmt in [
+                ("Agenda", ".pdf"),
+                ("Agenda", "html"),
+                ("PostMinutes", ".pdf"),
+                ("Video", "video"),
+            ]
+        ],
+    }
+    data = parse_meeting(record, "https://pub-campbell.escribemeetings.com")
+    assert data is not None
+    assert all(
+        data[key] is None for key in ("agenda_url", "agenda_html_url", "minutes_url", "video_url")
+    )
+    public_id = None
+    for db in app.dependency_overrides[get_db]():
+        meeting, _ = scraper.upsert_meeting(db, data)
+        db.commit()
+        public_id = meeting.id
+    assert public_id is not None
+    # Calendar producer rejects unsafe links without dropping the meeting.
+    for path in ["/", f"/meeting/{public_id}"]:
+        response = client.get(path)
+        assert response.status_code == 200 and "City Council Regular Meeting" in response.text
+        soup = BeautifulSoup(response.text, "html.parser")
+        assert all(
+            urlsplit(str(link.get("href", ""))).scheme in {"", "http", "https"}
+            for link in soup.select("a[href]")
+        )
+    # Consumer protection also covers unsafe data already saved by an older scraper.
+    for db in app.dependency_overrides[get_db]():
+        meeting = db.get(Meeting, public_id)
+        assert meeting is not None
+        meeting.agenda_url = meeting.minutes_url = meeting.video_url = unsafe
+        doc = Document(
+            meeting_id=public_id, doc_type="agenda", source_url=unsafe, summary="Saved summary"
+        )
+        db.add(doc)
+        db.commit()
+        email = BeautifulSoup(_build_email_html(meeting, doc, None), "html.parser")
+        assert all(
+            urlsplit(str(link.get("href", ""))).scheme in {"", "http", "https"}
+            for link in email.select("a[href]")
+        )
+    for path in ["/", f"/meeting/{public_id}"]:
+        response = client.get(path)
+        soup = BeautifulSoup(response.text, "html.parser")
+        assert "Saved summary" in soup.get_text()
+        assert all(
+            urlsplit(str(link.get("href", ""))).scheme in {"", "http", "https"}
+            for link in soup.select("a[href]")
+        )
+
+
+def test_legacy_source_links_remain_absolute(client: TestClient, meeting_id: int) -> None:
+    for db in app.dependency_overrides[get_db]():
+        meeting = db.get(Meeting, meeting_id)
+        assert meeting is not None
+        meeting.agenda_url = "/AgendaCenter/ViewFile/Agenda/_10072025-3159"
+        db.commit()
+    response = client.get(f"/meeting/{meeting_id}")
+    assert (
+        'href="https://www.campbellca.gov/AgendaCenter/ViewFile/Agenda/_10072025-3159"'
+        in response.text
+    )

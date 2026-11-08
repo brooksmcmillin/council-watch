@@ -8,14 +8,14 @@
     <time datetime="{{ meeting.date.isoformat() }}">{{ meeting.date.strftime('%B %d, %Y') }}</time>
 
     <div class="meeting-links">
-        {% if meeting.agenda_url %}
-        <a href="{{ base_url }}{{ meeting.agenda_url }}" target="_blank" class="pill">Agenda PDF</a>
+        {% if agenda or meeting.agenda_url %}
+        <a href="{{ city.resolve_url(agenda.source_url if agenda else meeting.agenda_url) }}" target="_blank" class="pill">Agenda</a>
         {% endif %}
-        {% if meeting.minutes_url %}
-        <a href="{{ base_url }}{{ meeting.minutes_url }}" target="_blank" class="pill">Minutes PDF</a>
+        {% if minutes or meeting.minutes_url %}
+        <a href="{{ city.resolve_url(minutes.source_url if minutes else meeting.minutes_url) }}" target="_blank" class="pill">Minutes</a>
         {% endif %}
         {% if meeting.video_url %}
-        <a href="{{ meeting.video_url }}" target="_blank" class="pill">Video</a>
+        <a href="{{ city.resolve_url(meeting.video_url) }}" target="_blank" class="pill">Video</a>
         {% endif %}
     </div>
 
@@ -23,7 +23,8 @@
     <section class="summary-section">
         <h2>Agenda Summary{% if agenda.revised_at %} <span class="revised-badge">Revised</span>{% endif %}</h2>
         <div class="summary-content">{{ agenda.summary }}</div>
-        <p class="ai-disclaimer">AI-generated summary ({{ agenda.summary_model }}, {{ agenda.summarized_at.strftime('%Y-%m-%d') if agenda.summarized_at else 'unknown' }}) — may contain errors. <a href="{{ base_url }}{{ meeting.agenda_url }}" target="_blank">Read the original document</a>.</p>
+        {% if agenda.source_notice %}<p class="ai-disclaimer">{{ agenda.source_notice }}</p>{% endif %}
+        <p class="ai-disclaimer">AI-generated summary ({{ agenda.summary_model }}, {{ agenda.summarized_at.strftime('%Y-%m-%d') if agenda.summarized_at else 'unknown' }}) — may contain errors. <a href="{{ city.resolve_url(agenda.source_url) }}" target="_blank">Read the original document</a>.</p>
     </section>
     {% endif %}
 
@@ -31,7 +32,8 @@
     <section class="summary-section">
         <h2>Minutes Summary{% if minutes.revised_at %} <span class="revised-badge">Revised</span>{% endif %}</h2>
         <div class="summary-content">{{ minutes.summary }}</div>
-        <p class="ai-disclaimer">AI-generated summary ({{ minutes.summary_model }}, {{ minutes.summarized_at.strftime('%Y-%m-%d') if minutes.summarized_at else 'unknown' }}) — may contain errors. <a href="{{ base_url }}{{ meeting.minutes_url }}" target="_blank">Read the original document</a>.</p>
+        {% if minutes.source_notice %}<p class="ai-disclaimer">{{ minutes.source_notice }}</p>{% endif %}
+        <p class="ai-disclaimer">AI-generated summary ({{ minutes.summary_model }}, {{ minutes.summarized_at.strftime('%Y-%m-%d') if minutes.summarized_at else 'unknown' }}) — may contain errors. <a href="{{ city.resolve_url(minutes.source_url) }}" target="_blank">Read the original document</a>.</p>
     </section>
     {% endif %}
 

@@ -40,6 +40,8 @@ class Document(Base):
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
     pdf_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     pdf_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Public HTML fallback when the portal's PDF endpoint is unavailable.
+    text_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Byte size of the stored PDF, used as a cheap HEAD pre-check signal to
     # skip re-downloading unchanged source PDFs (see scraper.ensure_document).
     pdf_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -56,6 +58,14 @@ class Document(Base):
     )
 
     meeting: Mapped["Meeting"] = relationship(back_populates="documents")
+
+    @property
+    def source_notice(self) -> str:
+        if self.text_content is not None:
+            return (
+                "Based on public HTML text; linked attachments and staff reports are not included."
+            )
+        return ""
 
 
 class Subscriber(Base):

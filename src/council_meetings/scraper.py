@@ -10,6 +10,7 @@ import re
 import time
 from datetime import UTC, date, datetime
 from pathlib import Path
+from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
@@ -17,6 +18,8 @@ from sqlalchemy.orm import Session
 
 from council_meetings.config import city, settings
 from council_meetings.db import SessionLocal
+from council_meetings.escribe import extract_document
+from council_meetings.escribe import fetch_meetings as fetch_escribe_meetings
 from council_meetings.models import Document, Meeting, ScrapeLog
 
 logger = logging.getLogger(__name__)
@@ -27,8 +30,25 @@ DOWNLOAD_DELAY = 2  # seconds between PDF downloads
 SLUG_RE = re.compile(r"(\d{8})-(\d+)")
 
 
-def _client() -> httpx.Client:
+def _check_source_request(request: httpx.Request) -> None:
+    """Apply the same source boundary to initial requests and every redirect hop."""
+    url = request.url
+    allowed = [httpx.URL(base) for base in (city.base_url, city.escribe_url) if base]
+    if (
+        url.scheme not in {"http", "https"}
+        or url.userinfo
+        or not any(
+            (url.scheme, url.host, url.port) == (base.scheme, base.host, base.port)
+            for base in allowed
+        )
+    ):
+        raise httpx.RequestError("Request outside configured city source origins", request=request)
+
+
+def _client(transport: httpx.BaseTransport | None = None) -> httpx.Client:
     return httpx.Client(
+        transport=transport,
+        event_hooks={"request": [_check_source_request]},
         headers={
             "User-Agent": city.user_agent,
             # Force identity encoding so a GET's stored byte size (len of the
@@ -140,7 +160,7 @@ def fetch_year(client: httpx.Client, year: int) -> str:
 def download_pdf(client: httpx.Client, relative_url: str, dest_path: Path) -> tuple[str, int]:
     """Download a PDF and return its (SHA-256 hash, byte size)."""
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    url = f"{city.base_url}{relative_url}"
+    url = urljoin(city.base_url + "/", relative_url)
     temp_path = dest_path.with_suffix(f"{dest_path.suffix}.part")
     digest = hashlib.sha256()
     size = 0
@@ -148,6 +168,8 @@ def download_pdf(client: httpx.Client, relative_url: str, dest_path: Path) -> tu
     try:
         with client.stream("GET", url) as resp:
             resp.raise_for_status()
+            if "text/html" in resp.headers.get("content-type", "").lower():
+                raise httpx.HTTPError(f"Expected PDF, received HTML from {url}")
             with temp_path.open("wb") as output:
                 for chunk in resp.iter_bytes():
                     output.write(chunk)
@@ -171,7 +193,7 @@ def head_content_length(client: httpx.Client, relative_url: str) -> int | None:
     validators, so a HEAD size check is the only body-free freshness signal
     available.
     """
-    url = f"{city.base_url}{relative_url}"
+    url = urljoin(city.base_url + "/", relative_url)
     try:
         resp = client.head(url)
         resp.raise_for_status()
@@ -192,12 +214,16 @@ def upsert_meeting(db: Session, data: dict) -> tuple[Meeting, bool]:
     existing = db.query(Meeting).filter_by(civicplus_id=data["civicplus_id"]).first()
     if existing:
         changed = False
-        if data["minutes_url"] and not existing.minutes_url:
-            existing.minutes_url = data["minutes_url"]
-            changed = True
-        if data["video_url"] and not existing.video_url:
-            existing.video_url = data["video_url"]
-            changed = True
+        for key in ("agenda_url", "minutes_url", "video_url"):
+            # Current portal links can change. Legacy listings must not replace
+            # links already migrated to eSCRIBE or remove a published link.
+            if (
+                data[key]
+                and ("agenda_html_url" in data or not getattr(existing, key))
+                and getattr(existing, key) != data[key]
+            ):
+                setattr(existing, key, data[key])
+                changed = True
         if changed:
             db.flush()
         return existing, False
@@ -253,7 +279,12 @@ def ensure_document(
     # HEAD pre-check: when we already have a stored size, avoid the full GET if
     # the server-reported Content-Length is unchanged. Skips both the (large)
     # body transfer and the DOWNLOAD_DELAY for the common unchanged case.
-    if existing is not None and existing.pdf_size is not None:
+    if (
+        existing is not None
+        and existing.pdf_path
+        and existing.pdf_size is not None
+        and existing.source_url == source_url
+    ):
         remote_size = head_content_length(client, source_url)
         if remote_size is not None and remote_size == existing.pdf_size:
             logger.debug(
@@ -297,6 +328,7 @@ def ensure_document(
         # Backfill pdf_size for legacy rows so future scrapes can use the HEAD
         # pre-check even though nothing changed this cycle.
         existing.pdf_size = pdf_size
+        existing.source_url = source_url
         db.flush()
         return "unchanged"
 
@@ -311,12 +343,58 @@ def ensure_document(
     existing.pdf_hash = pdf_hash
     existing.pdf_size = pdf_size
     existing.source_url = source_url
-    existing.summary = None
-    existing.summary_model = None
-    existing.summarized_at = None
-    existing.notified_email = False
-    existing.notified_bluesky = False
-    existing.revised_at = datetime.now(UTC)
+    existing.text_content = None
+    _clear_summary(existing)
+    db.flush()
+    return "revised"
+
+
+def _clear_summary(doc: Document) -> None:
+    doc.summary = None
+    doc.summary_model = None
+    doc.summarized_at = None
+    doc.notified_email = False
+    doc.notified_bluesky = False
+    doc.revised_at = datetime.now(UTC)
+
+
+def ensure_html_document(
+    db: Session,
+    client: httpx.Client,
+    meeting: Meeting,
+    doc_type: str,
+    source_url: str,
+    pdf_url: str | None = None,
+) -> str:
+    """Use HTML when no current PDF is saved, not on a transient refresh failure."""
+    existing = db.query(Document).filter_by(meeting_id=meeting.id, doc_type=doc_type).first()
+    if (
+        existing is not None
+        and existing.source_url == pdf_url
+        and existing.pdf_path
+        and Path(existing.pdf_path).is_file()
+    ):
+        return "unchanged"
+    response = client.get(source_url)
+    response.raise_for_status()
+    text = extract_document(response.text)
+    if existing is None:
+        db.add(
+            Document(
+                meeting_id=meeting.id, doc_type=doc_type, source_url=source_url, text_content=text
+            )
+        )
+        db.flush()
+        return "created"
+    if existing.text_content == text:
+        existing.source_url = source_url
+        return "unchanged"
+    existing.text_content = text
+    existing.source_url = source_url
+    existing.pdf_path = None
+    existing.pdf_hash = None
+    existing.pdf_size = None
+    _clear_summary(existing)
     db.flush()
     return "revised"
 
@@ -332,6 +410,7 @@ def scrape_meetings(years: list[int] | None = None) -> ScrapeLog:
     errors: list[str] = []
 
     db = SessionLocal()
+    client: httpx.Client | None = None
     try:
         client = _client()
 
@@ -353,6 +432,13 @@ def scrape_meetings(years: list[int] | None = None) -> ScrapeLog:
         for html in html_pages:
             all_meetings.extend(parse_meetings_html(html))
 
+        if city.escribe_url:
+            # Current-source records take precedence at the archive overlap.
+            current = fetch_escribe_meetings(
+                client, city.escribe_url, {datetime.now(UTC).year, *(years or [])}, errors
+            )
+            all_meetings = current + all_meetings
+
         # Deduplicate by civicplus_id (prefer first occurrence)
         seen: set[str] = set()
         unique_meetings: list[dict] = []
@@ -371,10 +457,41 @@ def scrape_meetings(years: list[int] | None = None) -> ScrapeLog:
                 meeting, _is_new = upsert_meeting(db, data)
 
                 for doc_type, url_key in (("agenda", "agenda_url"), ("minutes", "minutes_url")):
-                    if not data[url_key]:
+                    # A legacy-only run must not undo an earlier source cutover,
+                    # including when the portal's overlap year failed this cycle.
+                    if "agenda_html_url" not in data and city.escribe_url:
+                        saved = (
+                            db.query(Document)
+                            .filter_by(meeting_id=meeting.id, doc_type=doc_type)
+                            .first()
+                        )
+                        sources = (getattr(meeting, url_key), saved.source_url if saved else None)
+                        if any(
+                            source and source.startswith(city.escribe_url + "/")
+                            for source in sources
+                        ):
+                            continue
+                    pdf_url = data[url_key]
+                    html_url = data.get(f"{doc_type}_html_url")
+                    if not pdf_url and not html_url:
                         continue
-                    status = ensure_document(db, client, meeting, doc_type, data[url_key])
-                    if status == "created":
+                    status = (
+                        ensure_document(db, client, meeting, doc_type, pdf_url) if pdf_url else None
+                    )
+                    if status is None and html_url:
+                        try:
+                            status = ensure_html_document(
+                                db, client, meeting, doc_type, html_url, pdf_url=pdf_url
+                            )
+                        except (httpx.HTTPError, ValueError) as error:
+                            errors.append(
+                                f"Failed {doc_type} HTML for {data['civicplus_id']}: {error}"
+                            )
+                    if status is None:
+                        errors.append(
+                            f"No readable {doc_type} for {data['civicplus_id']} (PDF={pdf_url}, HTML={html_url})"
+                        )
+                    elif status == "created":
                         new_docs += 1
                     elif status == "revised":
                         revised_docs += 1
@@ -393,6 +510,8 @@ def scrape_meetings(years: list[int] | None = None) -> ScrapeLog:
 
         db.add(log)
         db.commit()
+        # Commit expires columns; reload them before returning a detached result.
+        db.refresh(log)
         db.expunge(log)
 
     except Exception as e:
@@ -402,11 +521,14 @@ def scrape_meetings(years: list[int] | None = None) -> ScrapeLog:
         try:
             db.add(log)
             db.commit()
+            db.refresh(log)
             db.expunge(log)
         except Exception:
             db.rollback()
     finally:
         db.close()
+        if client is not None:
+            client.close()
 
     return log
 

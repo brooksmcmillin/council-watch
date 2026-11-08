@@ -1,14 +1,15 @@
 # council-watch
 
-Monitors a [CivicPlus](https://www.civicplus.com/) city Agenda Center for new
-city-council agendas and minutes, summarizes each PDF with Claude, and publishes
+Monitors Campbell's [eSCRIBE portal](https://pub-campbell.escribemeetings.com/)
+and its legacy [CivicPlus](https://www.civicplus.com/) Agenda Center for new
+city-council agendas and minutes, summarizes documents with Claude, and publishes
 the results to a small public website plus email and Bluesky notifications.
 
 The deployed instance tracks the City of Campbell, CA at
 **[council.brooksmcmillin.com](https://council.brooksmcmillin.com)**.
 
 > Summaries are AI-generated and may contain errors or omissions — the original
-> PDFs remain the authoritative source. This project is not affiliated with any
+> documents remain the authoritative source. This project is not affiliated with any
 > city.
 
 ## What it does
@@ -17,20 +18,32 @@ A single FastAPI process serves the site and runs an in-process
 [APScheduler](https://apscheduler.readthedocs.io/) pipeline
 (`src/council_meetings/scheduler.py`) every `SCRAPE_INTERVAL_MINUTES`:
 
-1. **Scrape** (`scraper.py`) — fetches the city's `AgendaCenter` listing, parses
-   out each meeting and its agenda/minutes PDF links, and downloads new or
-   revised PDFs. Documents are content-hashed, so a re-posted (revised) PDF is
-   detected and re-summarized; a `HEAD` `Content-Length` pre-check skips
-   downloading files that haven't changed.
-2. **Summarize** (`summarizer.py`) — sends each un-summarized PDF to the
-   Anthropic API (`SUMMARIZATION_MODEL`, default `claude-sonnet-5`) and stores a
-   plain-language summary.
+1. **Scrape** (`scraper.py`, `escribe.py`) — reads all Council meeting types from
+   eSCRIBE's public calendar for the current year (past and upcoming), alongside
+   the legacy `AgendaCenter` archive. Full agenda-package PDFs are preferred over
+   cover sheets. When PDF retrieval fails, accessible agenda/minutes HTML is
+   extracted into plain text; challenge pages are not treated as documents.
+   A saved PDF from the same source is retained on a transient refresh failure;
+   its summary is not replaced just because HTML is available. At source cutover,
+   HTML may replace the active document, while old PDF bytes remain on disk.
+   PDF hashes and HTML text changes invalidate old summaries and notification
+   flags. A `HEAD` size pre-check avoids unchanged PDF downloads.
+2. **Summarize** (`summarizer.py`) — sends each un-summarized PDF or extracted
+   HTML text to the Anthropic API (`SUMMARIZATION_MODEL`, default `claude-sonnet-5`)
+   and stores a plain-language summary. HTML-based summaries explicitly exclude
+   linked attachments/staff reports; they are not full-package PDF summaries.
 3. **Notify** (`notifier.py`) — emails confirmed subscribers over SMTP and posts
    to Bluesky. Each channel is skipped unless it's configured.
 
 A second, slower job re-scrapes the previous `BACKFILL_YEARS` years through
-CivicPlus's `UpdateCategoryList` AJAX endpoint, so minutes posted long after a
-meeting are still picked up.
+both eSCRIBE calendar-year ranges and CivicPlus's `UpdateCategoryList` endpoint,
+so minutes posted long after a meeting are still picked up. Calendar-year results
+are not limited to the paginated, per-type PastMeetings listing. Failed years,
+malformed records and unreadable documents are recorded in `scrape_log.errors`.
+
+The verified overlapping October 7, 2025 regular meeting keeps CivicPlus id 3159
+and its existing public row; new portal meetings use `escribe-<UUID>` in the
+existing `civicplus_id` column. Legacy records and public meeting IDs are retained.
 
 ### Data model
 
@@ -39,8 +52,8 @@ SQLite (`data/council.db`, schema managed by Alembic) with PDFs on disk under
 
 | Table | Purpose |
 | --- | --- |
-| `meetings` | One row per council meeting, keyed by its CivicPlus id |
-| `documents` | Agenda/minutes PDFs, their hashes, summaries, and notify flags |
+| `meetings` | One row per meeting, with legacy numeric or namespaced eSCRIBE source id |
+| `documents` | PDF paths/hashes or extracted HTML text, summaries, and notify flags |
 | `subscribers` | Email subscribers with confirmation/unsubscribe tokens |
 | `scrape_log` | Per-run counts and errors |
 
@@ -109,9 +122,11 @@ optional and is skipped when left blank.
 
 ### Pointing it at a different city
 
-Nothing in the scraper, summarizer, or notifier is Campbell-specific — the city
-lives in `CityConfig` (`config.py`) and is overridden entirely through
-`CITY_`-prefixed environment variables:
+City display values and CivicPlus archive settings live in `CityConfig`
+(`config.py`) and use `CITY_`-prefixed environment variables. Campbell's current
+portal is enabled automatically only for its default legacy base/category.
+`CITY_ESCRIBE_BASE_URL=""` explicitly disables it; another portal URL can be set
+explicitly, but only Campbell's published format/overlap has been verified.
 
 ```bash
 CITY_NAME=Riverton                              # short name (email subjects, User-Agent)
@@ -120,6 +135,7 @@ CITY_DISPLAY_NAME=Riverton City Council         # display name in notifications
 CITY_BASE_URL=https://www.example.gov           # CivicPlus site root, no trailing slash
 CITY_AGENDA_PATH=City-Council-7                 # AgendaCenter category path segment
 CITY_CATEGORY_ID=7                              # CivicPlus catID for the backfill endpoint
+CITY_ESCRIBE_BASE_URL=                          # disable Campbell eSCRIBE for this city
 CITY_USER_AGENT=RivertonCouncilMonitor/1.0 (+https://example.com)
 ```
 
@@ -145,3 +161,14 @@ synced from Bitwarden Secrets Manager via external-secrets into a
 Design notes and background live on the internal wiki page
 [Campbell Council Meeting Monitor — Design](https://nexus.brooksmcmillin.com/wiki/council-meeting-monitor-design)
 (not publicly accessible).
+
+### Repair rollout notes
+
+Apply the additive `text_content` migration (`uv run alembic upgrade head`) before
+running the updated app. No existing archive rows are deleted. PDF access from
+the diagnostic client returned HTTP 403; HTML agendas/minutes were accessible.
+Production access and actual model credentials still require separate verification.
+A first scrape/backfill can discover many new documents and the normal pipeline
+will summarize and notify them if configured. Deployment, paid model execution,
+and notification delivery need separate authorization; do not use a pipeline run
+as a harmless verification command.

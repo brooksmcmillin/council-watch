@@ -23,14 +23,14 @@
     </div>
 
     <div class="meeting-links">
-        {% if m.agenda_url %}
-        <a href="{{ base_url }}{{ m.agenda_url }}" target="_blank" class="pill">Agenda PDF</a>
+        {% if agenda or m.agenda_url %}
+        <a href="{{ city.resolve_url(agenda.source_url if agenda else m.agenda_url) }}" target="_blank" class="pill">Agenda</a>
         {% endif %}
-        {% if m.minutes_url %}
-        <a href="{{ base_url }}{{ m.minutes_url }}" target="_blank" class="pill">Minutes PDF</a>
+        {% if minutes or m.minutes_url %}
+        <a href="{{ city.resolve_url(minutes.source_url if minutes else m.minutes_url) }}" target="_blank" class="pill">Minutes</a>
         {% endif %}
         {% if m.video_url %}
-        <a href="{{ m.video_url }}" target="_blank" class="pill">Video</a>
+        <a href="{{ city.resolve_url(m.video_url) }}" target="_blank" class="pill">Video</a>
         {% endif %}
     </div>
 
@@ -38,7 +38,7 @@
     <div class="summary-preview">
         <h3>Agenda Summary</h3>
         <p>{{ agenda.summary[:300] }}{% if agenda.summary|length > 300 %}… <a href="/meeting/{{ m.id }}">Read more</a>{% endif %}</p>
-        <p class="ai-disclaimer">AI-generated summary — may contain errors. <a href="{{ base_url }}{{ m.agenda_url }}" target="_blank">Read the original document</a>.</p>
+        <p class="ai-disclaimer">AI-generated summary — may contain errors. {{ agenda.source_notice }} <a href="{{ city.resolve_url(agenda.source_url) }}" target="_blank">Read the original document</a>.</p>
     </div>
     {% endif %}
 </article>

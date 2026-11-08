@@ -1,0 +1,53 @@
+{
+  "d": [
+    {
+      "ID": "dc3aba52-7cf5-4d1a-b3d6-d8a3315e9ee0",
+      "MeetingName": "City Council Regular Session Meeting",
+      "MeetingType": "City Council Regular Session Meeting",
+      "StartDate": "2026/11/02 19:00:43",
+      "MeetingDocumentLink": [
+        {"Type": "AgendaCover", "Format": ".pdf", "Url": "/FileStream.ashx?DocumentId=2373", "Title": "Agenda (PDF)"},
+        {"Type": "Agenda", "Format": ".pdf", "Url": "/FileStream.ashx?DocumentId=2377", "Title": "Agenda Full Package (PDF)"},
+        {"Type": "Agenda", "Format": "HTML", "Url": "/Meeting.aspx?Id=dc3aba52-7cf5-4d1a-b3d6-d8a3315e9ee0&Agenda=Agenda&lang=English", "Title": "Agenda Full Package (HTML)"},
+        {"Type": "Video", "Format": "Video", "Url": "./Players/ISIStandAlonePlayer.aspx?Id=dc3aba52-7cf5-4d1a-b3d6-d8a3315e9ee0", "Title": "Video"}
+      ]
+    },
+    {
+      "ID": "e1c38040-6364-4852-b54c-255525e508ef",
+      "MeetingName": "City Council Regular Session Meeting",
+      "MeetingType": "City Council Regular Session Meeting",
+      "StartDate": "2026/10/20 19:00:08",
+      "MeetingDocumentLink": [
+        {"Type": "AgendaCover", "Format": ".pdf", "Url": "/FileStream.ashx?DocumentId=2289", "Title": "Agenda (PDF)"},
+        {"Type": "Agenda", "Format": ".pdf", "Url": "/FileStream.ashx?DocumentId=2291", "Title": "Agenda Full Package (PDF)"},
+        {"Type": "Agenda", "Format": "HTML", "Url": "/Meeting.aspx?Id=e1c38040-6364-4852-b54c-255525e508ef&Agenda=Agenda&lang=English", "Title": "Agenda Full Package (HTML)"},
+        {"Type": "PostMinutes", "Format": ".pdf", "Url": "/FileStream.ashx?DocumentId=2416", "Title": "Minutes (PDF)"},
+        {"Type": "PostMinutes", "Format": "HTML", "Url": "/Meeting.aspx?Id=e1c38040-6364-4852-b54c-255525e508ef&Agenda=PostMinutes&lang=English", "Title": "Minutes (HTML)"}
+      ]
+    },
+    {
+      "ID": "b7118ce5-cc3a-4b89-b26e-014173365cb4",
+      "MeetingName": "City Council Executive Session ",
+      "MeetingType": "City Council Executive Session ",
+      "StartDate": "2026/04/21 17:00:00",
+      "MeetingDocumentLink": [
+        {"Type": "AgendaCover", "Format": ".pdf", "Url": "/FileStream.ashx?DocumentId=1188", "Title": "Agenda (PDF)"},
+        {"Type": "Agenda", "Format": "HTML", "Url": "/Meeting.aspx?Id=b7118ce5-cc3a-4b89-b26e-014173365cb4&Agenda=Agenda&lang=English", "Title": "Agenda Full Package (HTML)"},
+        {"Type": "PostMinutes", "Format": ".pdf", "Url": "/FileStream.ashx?DocumentId=1280", "Title": "Minutes (PDF)"},
+        {"Type": "PostMinutes", "Format": "HTML", "Url": "/Meeting.aspx?Id=b7118ce5-cc3a-4b89-b26e-014173365cb4&Agenda=PostMinutes&lang=English", "Title": "Minutes (HTML)"}
+      ]
+    },
+    {
+      "ID": "fdd357dd-6794-4d51-8709-ff788aeb167e",
+      "MeetingName": "City Council Regular Session Meeting",
+      "MeetingType": "City Council Regular Session Meeting",
+      "StartDate": "2025/10/07 19:00:07",
+      "MeetingDocumentLink": [
+        {"Type": "Agenda", "Format": ".pdf", "Url": "/FileStream.ashx?DocumentId=207", "Title": "Agenda Full Package (PDF)"},
+        {"Type": "Agenda", "Format": "HTML", "Url": "/Meeting.aspx?Id=fdd357dd-6794-4d51-8709-ff788aeb167e&Agenda=Agenda&lang=English", "Title": "Agenda Full Package (HTML)"},
+        {"Type": "AdditionalDocuments", "Format": ".pdf", "Url": "/FileStream.ashx?DocumentId=323", "Title": "Approved Executive Session Min. of 10.7.25"},
+        {"Type": "AdditionalDocuments", "Format": ".pdf", "Url": "/FileStream.ashx?DocumentId=324", "Title": "Approved Regular Session Min. 10.7.25"}
+      ]
+    }
+  ]
+}
