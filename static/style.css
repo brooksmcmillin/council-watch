@@ -173,6 +173,7 @@ h3 {
 .summary-content {
     margin: 0.75rem 0;
     line-height: 1.7;
+    white-space: pre-line;
 }
 
 /* AI disclaimer */
