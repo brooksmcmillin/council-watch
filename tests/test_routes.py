@@ -1,6 +1,8 @@
+import datetime as dt
 from collections.abc import Iterator
 
 import pytest
+from bs4 import BeautifulSoup
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -9,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 from council_meetings import main as main_module
 from council_meetings.db import get_db
 from council_meetings.main import app
-from council_meetings.models import Base, Subscriber
+from council_meetings.models import Base, Document, Meeting, Subscriber
 
 
 @pytest.fixture(autouse=True)
@@ -42,6 +44,73 @@ def client() -> Iterator[TestClient]:
     yield TestClient(app)
     app.dependency_overrides.clear()
     engine.dispose()
+
+
+@pytest.fixture
+def meeting_id(client: TestClient) -> int:
+    for db in app.dependency_overrides[get_db]():
+        meeting = Meeting(
+            date=dt.date(2026, 11, 8),
+            title="Regular Council Meeting",
+            civicplus_id="1234",
+            url_date_slug="_11082026-1234",
+        )
+        db.add(meeting)
+        db.commit()
+        return meeting.id
+    raise AssertionError("Database override did not yield a session")
+
+
+@pytest.mark.parametrize("doc_type", ["agenda", "minutes"])
+def test_meeting_summary_is_plain_text(client: TestClient, meeting_id: int, doc_type: str) -> None:
+    summary = (
+        "Budget & parks\n\n"
+        '<script>alert("script")</script>\n'
+        '<img src=x onerror="alert(1)">\n'
+        '<svg onload="alert(2)"></svg>\n'
+        "Next steps"
+    )
+    for db in app.dependency_overrides[get_db]():
+        db.add(
+            Document(
+                meeting_id=meeting_id, doc_type=doc_type, source_url="/doc.pdf", summary=summary
+            )
+        )
+        db.commit()
+
+    response = client.get(f"/meeting/{meeting_id}")
+
+    assert response.status_code == 200
+    soup = BeautifulSoup(response.text, "html.parser")
+    content = soup.select_one(".summary-content")
+    assert content is not None
+    assert content.find(True) is None
+    assert content.get_text() == summary
+    assert f"{doc_type.title()} Summary" in soup.get_text()
+    stylesheet = client.get("/static/style.css")
+    assert stylesheet.status_code == 200
+    assert (
+        "white-space: pre-line;"
+        in stylesheet.text.split(".summary-content {", 1)[1].split("}", 1)[0]
+    )
+
+
+def test_meeting_detail_without_summaries(client: TestClient, meeting_id: int) -> None:
+    response = client.get(f"/meeting/{meeting_id}")
+    assert response.status_code == 200
+    assert "Regular Council Meeting" in response.text
+    assert "No summaries available yet" in response.text
+
+
+def test_homepage_lists_meeting(client: TestClient, meeting_id: int) -> None:
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Regular Council Meeting" in response.text
+    assert f'href="/meeting/{meeting_id}"' in response.text
+
+
+def test_unknown_meeting_returns_404(client: TestClient) -> None:
+    assert client.get("/meeting/9999").status_code == 404
 
 
 def _subscriber(client: TestClient, email: str) -> Subscriber:
