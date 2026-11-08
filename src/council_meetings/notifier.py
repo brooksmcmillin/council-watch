@@ -4,6 +4,7 @@ import logging
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from html import escape
 
 from sqlalchemy.orm import Session
 
@@ -18,6 +19,8 @@ logger = logging.getLogger(__name__)
 def _doc_label(doc: Document) -> str:
     """Human label for a document, prefixed 'Revised' if the PDF was updated."""
     label = "Agenda" if doc.doc_type == "agenda" else "Minutes"
+    if doc.text_content is not None:
+        label += " (HTML)"
     return f"Revised {label}" if doc.revised_at else label
 
 
@@ -74,25 +77,25 @@ def send_confirmation_email(address: str, token: str) -> bool:
 def _build_email_html(meeting: Meeting, doc: Document, unsubscribe_url: str | None) -> str:
     doc_label = _doc_label(doc)
     base = settings.app_base_url.rstrip("/")
-    source_url = f"{city.base_url}{doc.source_url}"
+    source_url = escape(city.resolve_url(doc.source_url), quote=True)
     meeting_url = f"{base}/meeting/{meeting.id}"
 
-    summary_html = (doc.summary or "").replace("\n", "<br>")
+    summary_html = escape(doc.summary or "").replace("\n", "<br>")
 
     unsubscribe_html = ""
     if unsubscribe_url:
         unsubscribe_html = f'<br><a href="{unsubscribe_url}">Unsubscribe</a> from these emails.'
 
     return f"""\
-<h2>{meeting.title} — {doc_label} Summary</h2>
+<h2>{escape(meeting.title)} — {doc_label} Summary</h2>
 <p><strong>{meeting.date.strftime("%B %d, %Y")}</strong></p>
 
 {summary_html}
 
 <hr>
 <p style="font-size: 0.85em; color: #666;">
-AI-generated summary — may contain errors.
-<a href="{source_url}">Read the original {doc.doc_type} PDF</a> |
+AI-generated summary — may contain errors. {doc.source_notice}
+<a href="{source_url}">Read the original {doc.doc_type} document</a> |
 <a href="{meeting_url}">View on site</a>{unsubscribe_html}
 </p>
 """
@@ -111,8 +114,8 @@ def _build_email_text(meeting: Meeting, doc: Document, unsubscribe_url: str | No
 {doc.summary or "(no summary)"}
 
 ---
-AI-generated summary — may contain errors.
-Original PDF: {city.base_url}{doc.source_url}
+AI-generated summary — may contain errors. {doc.source_notice}
+Original document: {city.resolve_url(doc.source_url)}
 View on site: {base}/meeting/{meeting.id}{unsubscribe_text}
 """
 

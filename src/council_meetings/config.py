@@ -1,4 +1,20 @@
+from urllib.parse import urljoin
+
+import httpx
 from pydantic_settings import BaseSettings
+
+
+def resolve_public_url(base_url: str, url: str | None) -> str:
+    """Resolve published hyperlinks without admitting executable URL schemes."""
+    if not url:
+        return ""
+    try:
+        resolved = httpx.URL(urljoin(base_url.rstrip("/") + "/", url))
+    except (ValueError, httpx.InvalidURL):
+        return ""
+    if resolved.scheme not in {"http", "https"} or not resolved.host or resolved.userinfo:
+        return ""
+    return str(resolved)
 
 
 class _SharedEnvSettings(BaseSettings):
@@ -44,6 +60,18 @@ class CityConfig(_SharedEnvSettings):
     # CivicPlus category id (the ``catID`` used by the backfill endpoint).
     category_id: str = "10"
 
+    # None enables Campbell's current portal only for Campbell's legacy category.
+    # An empty string disables eSCRIBE when using a CivicPlus-only city.
+    escribe_base_url: str | None = None
+
+    @property
+    def escribe_url(self) -> str:
+        if self.escribe_base_url is not None:
+            return self.escribe_base_url.rstrip("/")
+        if self.base_url.rstrip("/") == "https://www.campbellca.gov" and self.category_id == "10":
+            return "https://pub-campbell.escribemeetings.com"
+        return ""
+
     # Identifies the bot to the city's servers.
     user_agent: str = (
         "CampbellCouncilMonitor/1.0 (+https://github.com/brooksmcmillin/council-meetings)"
@@ -52,6 +80,10 @@ class CityConfig(_SharedEnvSettings):
     @property
     def agenda_center_url(self) -> str:
         return f"{self.base_url}/AgendaCenter/{self.agenda_path}"
+
+    def resolve_url(self, url: str | None) -> str:
+        """Resolve safe legacy, portal and video links, including existing saved rows."""
+        return resolve_public_url(self.base_url, url)
 
     @property
     def backfill_url(self) -> str:
