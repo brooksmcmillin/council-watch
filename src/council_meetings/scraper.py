@@ -356,6 +356,7 @@ def _clear_summary(doc: Document) -> None:
     doc.summary_model = None
     doc.summarized_at = None
     doc.notified_email = False
+    doc.email_delivered_to = []
     doc.notified_bluesky = False
     doc.revised_at = datetime.now(UTC)
 

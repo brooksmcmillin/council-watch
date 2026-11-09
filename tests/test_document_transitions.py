@@ -42,6 +42,7 @@ def test_transient_pdf_failure_preserves_archive_and_delivery_state(
         doc = db_session.query(Document).one()
         doc.summary = "saved PDF summary"
         doc.notified_email = doc.notified_bluesky = True
+        doc.email_delivered_to = ["sub@example.invalid"]
         original = (doc.pdf_path, doc.pdf_hash, doc.pdf_size, doc.source_url)
         state["status"] = 403
         for _ in range(2):
@@ -71,6 +72,7 @@ def test_transient_pdf_failure_preserves_archive_and_delivery_state(
         assert doc.summary == "saved PDF summary"
         assert doc.notified_email and doc.notified_bluesky
         assert doc.revised_at is None
+        assert doc.email_delivered_to == ["sub@example.invalid"]
         state["body"] = b"%PDF-genuine revision"
         assert (
             scraper.ensure_document(db_session, client, meeting, "agenda", data["agenda_url"])
@@ -78,6 +80,7 @@ def test_transient_pdf_failure_preserves_archive_and_delivery_state(
         )
         assert doc.summary is None
         assert not doc.notified_email and not doc.notified_bluesky
+        assert doc.email_delivered_to == []
 
 
 def test_source_cutover_uses_new_html_without_deleting_old_pdf(
@@ -99,6 +102,7 @@ def test_source_cutover_uses_new_html_without_deleting_old_pdf(
         pdf_size=archive.stat().st_size,
         summary="old source summary",
         notified_email=True,
+        email_delivered_to=["sub@example.invalid"],
         notified_bluesky=True,
     )
     db_session.add(doc)
@@ -124,8 +128,10 @@ def test_source_cutover_uses_new_html_without_deleting_old_pdf(
         assert archive.read_bytes() == b"%PDF-legacy archive"
         assert doc.text_content and doc.pdf_path is None
         assert doc.summary is None and not doc.notified_email and not doc.notified_bluesky
+        assert doc.email_delivered_to == []
         doc.summary = "new HTML summary"
         doc.notified_email = True
+        doc.email_delivered_to = ["sub@example.invalid"]
         assert (
             scraper.ensure_html_document(
                 db_session,
@@ -138,3 +144,4 @@ def test_source_cutover_uses_new_html_without_deleting_old_pdf(
             == "unchanged"
         )
         assert doc.summary == "new HTML summary" and doc.notified_email
+        assert doc.email_delivered_to == ["sub@example.invalid"]
