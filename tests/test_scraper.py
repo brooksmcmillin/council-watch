@@ -1,18 +1,22 @@
 import hashlib
 from datetime import date
+from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
+from anthropic.types import TextBlock
 from sqlalchemy.orm import Session
 
-from council_meetings import scraper
+from council_meetings import scraper, summarizer
 from council_meetings.config import settings
 from council_meetings.models import Document, Meeting
 from tests.conftest import FakeClient
 
 
 @pytest.fixture(autouse=True)
-def _no_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+def _no_delay(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(scraper, "DOWNLOAD_DELAY", 0)
+    monkeypatch.chdir(tmp_path)
 
 
 @pytest.fixture
@@ -34,11 +38,14 @@ def _sha(content: bytes) -> str:
 
 
 def _existing_doc(db: Session, meeting: Meeting, content: bytes, size: int | None) -> Document:
+    pdf_path = Path("data/pdfs/existing.pdf")
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    pdf_path.write_bytes(content)
     doc = Document(
         meeting_id=meeting.id,
         doc_type="agenda",
         source_url=meeting.agenda_url,
-        pdf_path="data/pdfs/existing.pdf",
+        pdf_path=str(pdf_path),
         pdf_hash=_sha(content),
         pdf_size=size,
         summary="old summary",
@@ -81,6 +88,62 @@ def test_head_precheck_skips_unchanged_without_download(
     assert client.head_calls == 1
     assert client.get_calls == 0  # full download skipped
     assert doc.summary == "old summary"  # untouched
+
+
+def test_missing_pdf_with_matching_head_size_is_recovered_for_summarization(
+    db_session: Session, meeting: Meeting, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = b"%PDF-1.4 recovered agenda"
+    doc = _existing_doc(db_session, meeting, content, size=len(content))
+    pdf_path = Path(doc.pdf_path)
+    pdf_path.unlink()
+    doc.summary = None
+    doc_id = doc.id
+    client = FakeClient(head_length=len(content), get_content=content)
+
+    status = scraper.ensure_document(db_session, client, meeting, "agenda", meeting.agenda_url)
+    db_session.commit()
+    db_session.expire_all()
+    recovered = db_session.get(Document, doc_id)
+
+    assert status == "unchanged"  # same content, but the missing file is restored
+    assert client.get_calls == 1
+    assert recovered is not None
+    assert recovered.pdf_hash == _sha(content)
+    assert recovered.pdf_size == len(content)
+    assert Path(recovered.pdf_path).read_bytes() == content
+    assert db_session.query(Document).count() == 1
+
+    anthropic_client = Mock()
+    anthropic_client.beta.messages.create.return_value.content = [
+        TextBlock(type="text", text="recovered summary")
+    ]
+    monkeypatch.setattr(summarizer.anthropic, "Anthropic", Mock(return_value=anthropic_client))
+    assert summarizer.summarize_pdf(recovered.pdf_path, "agenda") == "recovered summary"
+    uploaded_file = anthropic_client.beta.files.upload.call_args.kwargs["file"]
+    assert uploaded_file.name == recovered.pdf_path
+    assert uploaded_file.closed
+
+
+def test_missing_pdf_failed_download_preserves_record(
+    db_session: Session, meeting: Meeting
+) -> None:
+    content = b"agenda-v1"
+    doc = _existing_doc(db_session, meeting, content, size=len(content))
+    pdf_path = Path(doc.pdf_path)
+    pdf_path.unlink()
+    client = FakeClient(head_length=len(content), get_error=True)
+
+    status = scraper.ensure_document(db_session, client, meeting, "agenda", meeting.agenda_url)
+
+    assert status is None
+    assert client.get_calls == 1
+    assert not pdf_path.exists()
+    assert doc.pdf_hash == _sha(content)
+    assert doc.pdf_size == len(content)
+    assert doc.summary == "old summary"
+    assert doc.notified_email is True
+    assert doc.notified_bluesky is True
 
 
 def test_size_change_triggers_download_and_marks_revised(

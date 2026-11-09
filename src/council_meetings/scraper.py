@@ -253,8 +253,9 @@ def ensure_document(
 
     New documents are downloaded. For existing documents, a cheap HEAD
     ``Content-Length`` pre-check is issued first: when the server-reported size
-    matches the stored ``pdf_size`` the source is assumed unchanged and the full
-    download (which can be 100+ MB for agenda packets) is skipped. Otherwise the
+    matches the stored ``pdf_size`` and the local PDF exists, the source is
+    assumed unchanged and the full download (which can be 100+ MB for agenda
+    packets) is skipped. Otherwise the
     PDF is re-downloaded and its SHA-256 compared against the stored ``pdf_hash``
     so that revisions published on the city side are detected. When a source PDF
     has changed, the stored file is replaced and the summary + notification state
@@ -276,7 +277,7 @@ def ensure_document(
     """
     existing = db.query(Document).filter_by(meeting_id=meeting.id, doc_type=doc_type).first()
 
-    # HEAD pre-check: when we already have a stored size, avoid the full GET if
+    # HEAD pre-check: when we have a local file and stored size, avoid the full GET if
     # the server-reported Content-Length is unchanged. Skips both the (large)
     # body transfer and the DOWNLOAD_DELAY for the common unchanged case.
     if (
@@ -284,6 +285,7 @@ def ensure_document(
         and existing.pdf_path
         and existing.pdf_size is not None
         and existing.source_url == source_url
+        and Path(existing.pdf_path).is_file()
     ):
         remote_size = head_content_length(client, source_url)
         if remote_size is not None and remote_size == existing.pdf_size:
