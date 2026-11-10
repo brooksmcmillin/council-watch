@@ -35,7 +35,7 @@ def _check_source_request(request: httpx.Request) -> None:
     url = request.url
     allowed = [httpx.URL(base) for base in (city.base_url, city.escribe_url) if base]
     if (
-        url.scheme not in {"http", "https"}
+        url.scheme != "https"
         or url.userinfo
         or not any(
             (url.scheme, url.host, url.port) == (base.scheme, base.host, base.port)
