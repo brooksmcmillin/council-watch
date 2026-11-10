@@ -1,3 +1,4 @@
+from ipaddress import IPv4Network, IPv6Network
 from urllib.parse import urljoin
 
 import httpx
@@ -119,6 +120,8 @@ class Settings(_SharedEnvSettings):
     # App
     scrape_interval_minutes: int = 60
     app_base_url: str = "http://localhost:8000"
+    # Only these socket peers may supply Cloudflare visitor identities.
+    trusted_proxy_networks: tuple[IPv4Network | IPv6Network, ...] = ()
 
     # Historical backfill: periodically re-scrape prior years so late-posted
     # minutes and older meetings are captured without manual runs.

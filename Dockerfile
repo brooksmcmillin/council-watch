@@ -33,4 +33,4 @@ USER 1000
 EXPOSE 8000
 
 # Apply migrations against the mounted data volume, then serve.
-CMD ["sh", "-c", "alembic upgrade head && uvicorn council_meetings.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn council_meetings.main:app --host 0.0.0.0 --port 8000 --no-proxy-headers"]
