@@ -73,7 +73,7 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 uv sync                      # install deps (--all-groups also gets the dev tools)
 cp .env.example .env         # then set ANTHROPIC_API_KEY at minimum
 uv run alembic upgrade head  # create data/council.db
-uv run uvicorn council_meetings.main:app --reload
+uv run uvicorn council_meetings.main:app --reload --no-proxy-headers
 ```
 
 The site is then at <http://localhost:8000>. Starting the app also starts the
@@ -89,6 +89,30 @@ Or with Docker — reads `.env`, mounts `./data`, serves on `:8000`:
 ```bash
 docker compose up --build
 ```
+
+### Subscription proxy trust
+
+Direct/local Docker access needs no proxy configuration: by default rate limits
+use the socket peer and ignore visitor headers. For Cloudflare → Traefik → app
+(or another trusted forwarding chain), set `TRUSTED_PROXY_NETWORKS` to a JSON
+array of the **app-visible proxy peer** IPs/CIDRs, for example
+`["192.0.2.10/32", "2001:db8:1::10/128"]` (documentation addresses, not deployment
+values). Restart the app after changing it. Invalid networks fail startup.
+
+Only allow peers you control, with ingress restricted to the trusted edge and
+`CF-Connecting-IP` overwritten there; a trusted peer must never relay a
+client-chosen value from a bypass path. Do not trust all private/pod networks or
+`0.0.0.0/0`. Observe the actual peer addresses in your deployment before setting
+the list. The production ingress's Cloudflare-only middleware is an upstream
+prerequisite, not an application peer allowlist. Until configured, proxied
+visitors share the proxy's bucket; configure trust before rolling out behind a
+proxy to retain separate normalized visitor buckets.
+
+Keep Uvicorn's `--no-proxy-headers` in custom launch commands, as in the image:
+the application must see the real socket peer, not a value rewritten from
+`X-Forwarded-For` (including via `FORWARDED_ALLOW_IPS`). Only `CF-Connecting-IP`
+from configured peers is used; missing/malformed values fall back to the peer.
+These are deployment prerequisites, not a claim of live deployment verification.
 
 ### Checks
 
@@ -115,6 +139,7 @@ optional and is skipped when left blank.
 | `DATABASE_URL` | `sqlite:///data/council.db` | |
 | `PDF_STORAGE_DIR` | `data/pdfs` | |
 | `APP_BASE_URL` | `http://localhost:8000` | Used to build links in emails |
+| `TRUSTED_PROXY_NETWORKS` | `[]` | JSON array of trusted app-visible proxy CIDRs; see proxy trust above |
 | `SCRAPE_INTERVAL_MINUTES` | `60` | Pipeline cadence |
 | `BACKFILL_YEARS` / `BACKFILL_INTERVAL_HOURS` | `2` / `168` | `0` years disables the backfill job |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM` | blank | Email turns on once `SMTP_HOST` and `EMAIL_FROM` are both set |

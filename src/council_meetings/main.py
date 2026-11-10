@@ -12,7 +12,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from council_meetings import subscriptions
-from council_meetings.config import city
+from council_meetings.config import city, settings
 from council_meetings.db import get_db, init_db
 from council_meetings.models import Document, Meeting
 from council_meetings.notifier import send_confirmation_email
@@ -55,19 +55,21 @@ confirm_limiter = RateLimiter(limit=30, window_seconds=60)
 
 
 def _client_ip(request: Request) -> str:
-    """Return the normalized visitor IP supplied by the trusted Cloudflare edge."""
-    # Production is proxied by Cloudflare and Traefik, so request.client is the
-    # ingress pod. Cloudflare overwrites CF-Connecting-IP at the edge; local/direct
-    # deployments fall back to the socket peer.
-    candidate = request.headers.get("cf-connecting-ip")
-    if candidate is None and request.client is not None:
-        candidate = request.client.host
-    if candidate is None:
+    """Trust visitor headers only from configured socket peers."""
+    if request.client is None:
         return "unknown"
     try:
-        return ip_address(candidate.strip()).compressed
+        peer = ip_address(request.client.host)
     except ValueError:
-        return request.client.host if request.client is not None else "unknown"
+        return request.client.host
+    if any(peer in network for network in settings.trusted_proxy_networks):
+        candidate = request.headers.get("cf-connecting-ip")
+        if candidate is not None:
+            try:
+                return ip_address(candidate.strip()).compressed
+            except ValueError:
+                pass
+    return peer.compressed
 
 
 def _rate_limit_error(request: Request, retry_after: int) -> HTMLResponse:

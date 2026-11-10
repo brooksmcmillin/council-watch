@@ -1,5 +1,6 @@
 import datetime as dt
 from collections.abc import Iterator
+from ipaddress import ip_network
 from urllib.parse import urlsplit
 
 import pytest
@@ -21,8 +22,16 @@ from council_meetings.notifier import _build_email_html
 @pytest.fixture(autouse=True)
 def _confirmation_email(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(main_module, "send_confirmation_email", lambda _address, _token: True)
+    monkeypatch.setattr(main_module.settings, "trusted_proxy_networks", ())
     main_module.subscribe_limiter.reset()
     main_module.confirm_limiter.reset()
+
+
+@pytest.fixture
+def trusted_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        main_module.settings, "trusted_proxy_networks", (ip_network("192.0.2.1/32"),)
+    )
 
 
 @pytest.fixture
@@ -45,7 +54,7 @@ def client() -> Iterator[TestClient]:
     app.dependency_overrides[get_db] = _override_get_db
     # Not entering the TestClient context manager, so the app lifespan
     # (which would start the scheduler) does not run.
-    yield TestClient(app)
+    yield TestClient(app, client=("192.0.2.1", 50000))
     app.dependency_overrides.clear()
     engine.dispose()
 
@@ -188,7 +197,7 @@ def test_subscribe_burst_from_one_ip_is_throttled(
     assert len(sent) == main_module.subscribe_limiter.limit
 
 
-def test_subscribe_rate_limit_is_per_ip(client: TestClient) -> None:
+def test_subscribe_rate_limit_is_per_ip(client: TestClient, trusted_proxy: None) -> None:
     for request_number in range(main_module.subscribe_limiter.limit):
         client.post(
             "/subscribe",
@@ -203,6 +212,39 @@ def test_subscribe_rate_limit_is_per_ip(client: TestClient) -> None:
     )
 
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize("header", ["CF-Connecting-IP", "X-Forwarded-For"])
+def test_direct_signup_cannot_rotate_header_buckets(client: TestClient, header: str) -> None:
+    for number in range(main_module.subscribe_limiter.limit):
+        response = client.post(
+            "/subscribe",
+            data={"email": f"direct-{number}@example.com"},
+            headers={header: f"203.0.113.{number + 1}"},
+        )
+        assert response.status_code == 200
+    response = client.post(
+        "/subscribe",
+        data={"email": "blocked@example.com"},
+        headers={header: "203.0.113.99"},
+    )
+    assert response.status_code == 429
+    assert _subscriber(client, "blocked@example.com") is None
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_direct_confirmation_cannot_rotate_header_buckets(client: TestClient, method: str) -> None:
+    for number in range(main_module.confirm_limiter.limit):
+        response = client.request(
+            method, "/confirm/bogus-token", headers={"CF-Connecting-IP": f"203.0.113.{number + 1}"}
+        )
+        assert response.status_code == 404
+    assert (
+        client.request(
+            method, "/confirm/bogus-token", headers={"CF-Connecting-IP": "203.0.113.99"}
+        ).status_code
+        == 429
+    )
 
 
 def test_failed_confirmation_send_can_be_retried(
@@ -303,7 +345,9 @@ def test_confirm_rejects_inactive_and_rotated_tokens(client: TestClient) -> None
 
 
 @pytest.mark.parametrize("method", ["get", "post"])
-def test_confirm_burst_from_one_ip_is_throttled(client: TestClient, method: str) -> None:
+def test_confirm_burst_from_one_ip_is_throttled(
+    client: TestClient, method: str, trusted_proxy: None
+) -> None:
     headers = {"CF-Connecting-IP": "2001:db8::1"}
     client.post("/subscribe", data={"email": "limited@example.com"})
     token = _subscriber(client, "limited@example.com").confirmation_token
