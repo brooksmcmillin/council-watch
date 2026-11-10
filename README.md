@@ -61,8 +61,9 @@ SQLite (`data/council.db`, schema managed by Alembic) with PDFs on disk under
 
 `/` (recent meetings), `/meeting/{id}`, `/about`, `/health`, and the subscription
 flow: `/subscribe`, `/confirm/{token}`, `/unsubscribe/{token}`. Email signup is
-**confirmed opt-in** — an address receives nothing until its confirmation link is
-clicked — and the public subscription routes are rate-limited per client IP.
+**confirmed opt-in** — opening the email link displays a form; the address receives
+summaries only after submitting its confirmation button. GET and POST confirmation
+requests share the existing per-client-IP rate limit.
 
 ## Local development
 
