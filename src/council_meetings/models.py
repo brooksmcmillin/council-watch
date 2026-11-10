@@ -1,6 +1,6 @@
 import datetime as dt
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Text, func
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Integer, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -52,6 +52,9 @@ class Document(Base):
     # previously stored copy. Drives a "Revised" indicator in notifications.
     revised_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     notified_email: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    email_delivered_to: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]", nullable=False
+    )
     notified_bluesky: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False

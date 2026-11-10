@@ -167,16 +167,21 @@ def _build_message(
 def send_email(meeting: Meeting, doc: Document, db: Session) -> bool:
     """Send per-subscriber email notifications for a new document summary.
 
-    Returns ``True`` when the channel is satisfied (delivered to at least one
-    recipient, or there were no recipients to send to), ``False`` on an SMTP
-    failure that should be retried on the next pipeline run.
+    Returns ``True`` when all current recipients are satisfied, including an
+    empty recipient list. Successful addresses are persisted by the caller's
+    transaction so subsequent cycles retry only remaining recipients.
     """
     if not settings.email_enabled:
         return False
 
-    recipients = _email_recipients(db)
+    delivered = set(doc.email_delivered_to)
+    recipients = [
+        (address, token)
+        for address, token in _email_recipients(db)
+        if address.lower() not in delivered
+    ]
     if not recipients:
-        logger.info("No email recipients for document %d; skipping", doc.id)
+        logger.info("No pending email recipients for document %d; skipping", doc.id)
         return True
 
     doc_label = _doc_label(doc)
@@ -194,7 +199,13 @@ def send_email(meeting: Meeting, doc: Document, db: Session) -> bool:
             for address, token in recipients:
                 msg = _build_message(meeting, doc, subject, address, token)
                 try:
-                    server.sendmail(settings.email_from, [address], msg.as_string())
+                    refused = server.sendmail(settings.email_from, [address], msg.as_string())
+                    if refused:
+                        logger.error("Recipient refused for document %d: %s", doc.id, address)
+                        continue
+                    delivered.add(address.lower())
+                    # Assign a new list so SQLAlchemy tracks the JSON change.
+                    doc.email_delivered_to = sorted(delivered)
                     sent += 1
                 except Exception as e:
                     logger.error("Failed to send to %s for document %d: %s", address, doc.id, e)
@@ -203,7 +214,7 @@ def send_email(meeting: Meeting, doc: Document, db: Session) -> bool:
         return False
 
     logger.info("Email sent for document %d to %d/%d recipients", doc.id, sent, len(recipients))
-    return sent > 0
+    return sent == len(recipients)
 
 
 def post_bluesky(meeting: Meeting, doc: Document) -> bool:
