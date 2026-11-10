@@ -173,6 +173,22 @@ def subscribe_submit(
 
 @app.get("/confirm/{token}", response_class=HTMLResponse)
 def confirm_subscription(token: str, request: Request, db: Session = Depends(get_db)):
+    """Show the confirmation form without opting in link-prefetching mail scanners."""
+    allowed, retry_after = confirm_limiter.check(_client_ip(request))
+    if not allowed:
+        return _rate_limit_error(request, retry_after)
+
+    subscriber = subscriptions.find_by_confirmation_token(db, token)
+    return templates.TemplateResponse(
+        request,
+        "confirm.html",
+        {"subscriber": subscriber, "token": token},
+        status_code=200 if subscriber else 404,
+    )
+
+
+@app.post("/confirm/{token}", response_class=HTMLResponse)
+def confirm_subscription_submit(token: str, request: Request, db: Session = Depends(get_db)):
     allowed, retry_after = confirm_limiter.check(_client_ip(request))
     if not allowed:
         return _rate_limit_error(request, retry_after)

@@ -55,12 +55,17 @@ def subscribe(db: Session, email: str) -> tuple[Subscriber, str]:
     return subscriber, "created"
 
 
+def find_by_confirmation_token(db: Session, token: str) -> Subscriber | None:
+    """Look up an active subscriber's confirmation token without changing state."""
+    return db.query(Subscriber).filter_by(confirmation_token=token, active=True).first()
+
+
 def confirm(db: Session, token: str) -> Subscriber | None:
     """Confirm the subscriber owning ``token`` and return it.
 
     Confirmation is idempotent. An unknown or rotated token returns ``None``.
     """
-    subscriber = db.query(Subscriber).filter_by(confirmation_token=token, active=True).first()
+    subscriber = find_by_confirmation_token(db, token)
     if subscriber is None:
         return None
     if not subscriber.confirmed:

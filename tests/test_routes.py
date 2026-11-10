@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from council_meetings import main as main_module
-from council_meetings import scraper
+from council_meetings import scraper, subscriptions
 from council_meetings.db import get_db
 from council_meetings.escribe import parse_meeting
 from council_meetings.main import app
@@ -231,36 +231,97 @@ def test_failed_confirmation_send_can_be_retried(
     assert sent == [(subscriber.email, subscriber.confirmation_token)]
 
 
-def test_confirm_route_activates_subscription(client: TestClient) -> None:
+def test_confirm_requires_form_submission(client: TestClient) -> None:
     client.post("/subscribe", data={"email": "confirm@example.com"})
     token = _subscriber(client, "confirm@example.com").confirmation_token
+    path = f"/confirm/{token}"
 
-    resp = client.get(f"/confirm/{token}")
+    response = client.get(path)
+    assert response.status_code == 200
+    assert client.get(path).status_code == 200
+    assert _subscriber(client, "confirm@example.com").confirmed is False
+    # HEAD is either unsupported or read-only; it must never opt in a mailbox.
+    assert client.head(path).status_code in {200, 405}
+    assert _subscriber(client, "confirm@example.com").confirmed is False
+    for db in app.dependency_overrides[get_db]():
+        assert subscriptions.active_subscribers(db) == []
 
-    assert resp.status_code == 200
-    assert "confirmed" in resp.text.lower()
+    soup = BeautifulSoup(response.text, "html.parser")
+    form = soup.select_one("form.subscribe-form")
+    assert form is not None
+    assert form.get("method") == "post"
+    assert form.get("action") == path
+    assert form.select_one('button[type="submit"]') is not None
+    assert "confirm@example.com" in soup.get_text()
+    confirmed = client.post(str(form["action"]))
+    assert confirmed.status_code == 200
+    assert "subscription is confirmed" in confirmed.text.lower()
     assert _subscriber(client, "confirm@example.com").confirmed is True
+    for db in app.dependency_overrides[get_db]():
+        assert [sub.email for sub in subscriptions.active_subscribers(db)] == [
+            "confirm@example.com"
+        ]
 
+    again = client.post(path)
+    assert again.status_code == 200
+    assert "subscription is confirmed" in again.text.lower()
+    revisited = client.get(path)
+    assert "already confirmed" in revisited.text.lower()
+    assert BeautifulSoup(revisited.text, "html.parser").select_one("form.subscribe-form") is None
     duplicate = client.post("/subscribe", data={"email": "confirm@example.com"})
     assert "already subscribed" in duplicate.text.lower()
 
 
-def test_confirm_route_unknown_token_404(client: TestClient) -> None:
-    resp = client.get("/confirm/bogus-token")
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_confirm_route_unknown_token_404(client: TestClient, method: str) -> None:
+    resp = client.request(method, "/confirm/bogus-token")
     assert resp.status_code == 404
+    assert "not valid" in resp.text.lower()
 
 
-def test_confirm_burst_from_one_ip_is_throttled(client: TestClient) -> None:
+def test_confirm_rejects_inactive_and_rotated_tokens(client: TestClient) -> None:
+    client.post("/subscribe", data={"email": "cycle@example.com"})
+    subscriber = _subscriber(client, "cycle@example.com")
+    path = f"/confirm/{subscriber.confirmation_token}"
+    client.get(path)  # A form opened before unsubscribing must not remain valid.
+    client.post(f"/unsubscribe/{subscriber.unsubscribe_token}")
+    for method in ["get", "post"]:
+        assert client.request(method, path).status_code == 404
+    inactive = _subscriber(client, "cycle@example.com")
+    assert inactive.active is False
+    assert inactive.confirmed is False
+
+    client.post("/subscribe", data={"email": "cycle@example.com"})
+    subscriber = _subscriber(client, "cycle@example.com")
+    assert f"/confirm/{subscriber.confirmation_token}" != path
+    for method in ["get", "post"]:
+        assert client.request(method, path).status_code == 404
+    assert _subscriber(client, "cycle@example.com").confirmed is False
+    assert client.get(f"/confirm/{subscriber.confirmation_token}").status_code == 200
+    assert client.post(f"/confirm/{subscriber.confirmation_token}").status_code == 200
+    assert _subscriber(client, "cycle@example.com").confirmed is True
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_confirm_burst_from_one_ip_is_throttled(client: TestClient, method: str) -> None:
     headers = {"CF-Connecting-IP": "2001:db8::1"}
+    client.post("/subscribe", data={"email": "limited@example.com"})
+    token = _subscriber(client, "limited@example.com").confirmation_token
+    path = f"/confirm/{token}"
 
-    for _ in range(main_module.confirm_limiter.limit):
-        response = client.get("/confirm/bogus-token", headers=headers)
+    for request_number in range(main_module.confirm_limiter.limit):
+        # GET and POST draw on the same existing allowance.
+        request_method = "get" if request_number % 2 == 0 else "post"
+        response = client.request(request_method, "/confirm/bogus-token", headers=headers)
         assert response.status_code == 404
 
-    throttled = client.get("/confirm/bogus-token", headers=headers)
-
+    throttled = client.request(method, path, headers=headers)
     assert throttled.status_code == 429
     assert throttled.headers["Retry-After"] == "60"
+    assert _subscriber(client, "limited@example.com").confirmed is False
+    other_ip = client.post(path, headers={"CF-Connecting-IP": "2001:db8::2"})
+    assert other_ip.status_code == 200
+    assert _subscriber(client, "limited@example.com").confirmed is True
 
 
 def test_unsubscribe_get_is_read_only(client: TestClient) -> None:

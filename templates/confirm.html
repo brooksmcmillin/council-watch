@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}Confirm subscription — {{ city.name }} Council Meetings{% endblock %}
+
+{% block content %}
+<h1>Confirm subscription</h1>
+{% if not subscriber %}
+<p class="notice notice-error">That confirmation link is not valid.</p>
+<p><a href="/subscribe">Subscribe again</a> to request a new confirmation link.</p>
+{% elif subscriber.confirmed %}
+<p class="notice notice-success">
+    Your subscription is already confirmed. You'll receive new summaries by email.
+</p>
+{% else %}
+<p>Subscribe <strong>{{ subscriber.email }}</strong> to meeting-summary emails?</p>
+<form method="post" action="/confirm/{{ token }}" class="subscribe-form">
+    <button type="submit">Confirm subscription</button>
+</form>
+{% endif %}
+{% endblock %}
