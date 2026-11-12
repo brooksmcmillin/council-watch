@@ -27,6 +27,10 @@ STATIC_DIR = PROJECT_ROOT / "static"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+    logging.getLogger("council_meetings").setLevel(logging.INFO)
     init_db()
     # Import here to avoid circular imports
     from council_meetings.scheduler import start_scheduler

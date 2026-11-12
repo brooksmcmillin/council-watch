@@ -32,8 +32,10 @@ A single FastAPI process serves the site and runs an in-process
    HTML text to the Anthropic API (`SUMMARIZATION_MODEL`, default `claude-sonnet-5`)
    and stores a plain-language summary. HTML-based summaries explicitly exclude
    linked attachments/staff reports; they are not full-package PDF summaries.
-   Oversized PDFs are split into consecutive page ranges (without dropping pages);
-   text inputs are split when the provider rejects their size. Partial summaries
+   PDFs are uploaded from open files. Oversized PDFs are split into consecutive
+   page ranges on the PDF storage volume (without dropping pages), releasing the
+   parent parser before processing each child; text inputs are split when the
+   provider rejects their size. Partial summaries
    are combined into one final summary, requiring additional API calls. A single
    PDF page that still exceeds the input limit remains a visible failure.
 3. **Notify** (`notifier.py`) — emails confirmed subscribers over SMTP and posts
@@ -191,6 +193,20 @@ synced from Bitwarden Secrets Manager via external-secrets into a
 Design notes and background live on the internal wiki page
 [Campbell Council Meeting Monitor — Design](https://nexus.brooksmcmillin.com/wiki/council-meeting-monitor-design)
 (not publicly accessible).
+
+### Memory diagnostics
+
+Application INFO logs include pipeline stages, document IDs, current RSS and
+process-lifetime peak RSS (`rss_kib` / `peak_rss_kib`, Linux procfs). Memory records
+contain no document text, credentials or subscriber data. A final `.start` without
+its matching `.complete` helps locate an interrupted stage; `/health` alone does
+not prove pipeline progress. These boundary samples can miss transient peaks.
+
+PDF splitting needs writable disk space beside the source PDF; temporary parts
+are removed on normal success or exception. An uncatchable process kill may leave
+`summary-*` directories behind. Parser memory is not hard-capped by file-backed
+I/O. See [the offline profile and production limits](docs/pdf-memory.md) before
+changing resource limits or claiming production recovery.
 
 ### Repair rollout notes
 
