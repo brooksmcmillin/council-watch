@@ -1,10 +1,12 @@
 import hashlib
 from datetime import date
+from io import BytesIO
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 from anthropic.types import TextBlock
+from pypdf import PdfWriter
 from sqlalchemy.orm import Session
 
 from council_meetings import scraper, summarizer
@@ -93,7 +95,11 @@ def test_head_precheck_skips_unchanged_without_download(
 def test_missing_pdf_with_matching_head_size_is_recovered_for_summarization(
     db_session: Session, meeting: Meeting, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    content = b"%PDF-1.4 recovered agenda"
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    with BytesIO() as output:
+        writer.write(output)
+        content = output.getvalue()
     doc = _existing_doc(db_session, meeting, content, size=len(content))
     pdf_path = Path(doc.pdf_path)
     pdf_path.unlink()
@@ -114,14 +120,15 @@ def test_missing_pdf_with_matching_head_size_is_recovered_for_summarization(
     assert Path(recovered.pdf_path).read_bytes() == content
     assert db_session.query(Document).count() == 1
 
-    anthropic_client = Mock()
+    anthropic_client = MagicMock()
+    anthropic_client.__enter__.return_value = anthropic_client
     anthropic_client.beta.messages.create.return_value.content = [
         TextBlock(type="text", text="recovered summary")
     ]
     monkeypatch.setattr(summarizer.anthropic, "Anthropic", Mock(return_value=anthropic_client))
     assert summarizer.summarize_pdf(recovered.pdf_path, "agenda") == "recovered summary"
     uploaded_file = anthropic_client.beta.files.upload.call_args.kwargs["file"]
-    assert uploaded_file.name == recovered.pdf_path
+    assert uploaded_file.name == "meeting.pdf"
     assert uploaded_file.closed
 
 
