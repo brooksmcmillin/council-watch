@@ -1,5 +1,7 @@
+import logging
 from pathlib import Path
 
+import pytest
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 
@@ -35,3 +37,14 @@ def test_text_migration_preserves_existing_archive(tmp_path: Path) -> None:
         column["name"] for column in inspect(engine).get_columns("documents")
     }
     engine.dispose()
+
+
+def test_migration_preserves_application_loggers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    logger = logging.getLogger("council_meetings.diagnostics")
+    monkeypatch.setattr(logger, "disabled", False)
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{tmp_path / 'logging.db'}")
+    command.upgrade(config, "head")
+    assert not logger.disabled
