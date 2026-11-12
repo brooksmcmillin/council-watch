@@ -128,7 +128,7 @@ def test_missing_pdf_with_matching_head_size_is_recovered_for_summarization(
     monkeypatch.setattr(summarizer.anthropic, "Anthropic", Mock(return_value=anthropic_client))
     assert summarizer.summarize_pdf(recovered.pdf_path, "agenda") == "recovered summary"
     uploaded_file = anthropic_client.beta.files.upload.call_args.kwargs["file"]
-    assert uploaded_file.name == "meeting.pdf"
+    assert uploaded_file.name == recovered.pdf_path
     assert uploaded_file.closed
 
 

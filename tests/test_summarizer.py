@@ -1,4 +1,4 @@
-from io import BytesIO
+from io import BufferedReader, BytesIO
 from pathlib import Path
 from types import SimpleNamespace, TracebackType
 from typing import BinaryIO, cast
@@ -91,6 +91,33 @@ def test_summarize_pdf_uses_configured_model(
     assert source == {"type": "file", "file_id": "file_test"}
 
 
+def test_pdf_uses_disk_handles_without_whole_file_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = _mock_client(monkeypatch)
+    path = tmp_path / "meeting.pdf"
+    path.write_bytes(_pdf_bytes(2))
+    real_reader = summarizer.PdfReader
+
+    def reader(source: BinaryIO) -> PdfReader:
+        assert isinstance(source, BufferedReader)
+        return real_reader(source)
+
+    def upload(*, file: BinaryIO) -> SimpleNamespace:
+        assert isinstance(file, BufferedReader)
+        assert file.read(5) == b"%PDF-"
+        return SimpleNamespace(id="file_streamed")
+
+    def no_read_bytes(_path: Path) -> bytes:
+        raise AssertionError("PDFs must not be read wholesale")
+
+    monkeypatch.setattr(summarizer, "PdfReader", reader)
+    monkeypatch.setattr(Path, "read_bytes", no_read_bytes)
+    client.beta.files.upload.side_effect = upload
+    assert summarizer.summarize_pdf(str(path), "agenda") == "PDF summary"
+    client.beta.files.delete.assert_called_once_with("file_streamed")
+
+
 @pytest.mark.parametrize("beta", [False, True])
 def test_response_ignores_thinking_and_joins_text(beta: bool) -> None:
     text_type = BetaTextBlock if beta else TextBlock
@@ -180,6 +207,63 @@ def test_pdf_splitting_preserves_all_pages(
     if page_count == 5:
         assert "First part" in synthesis[1]["text"]
         assert "Second part" in synthesis[1]["text"]
+
+
+@pytest.mark.parametrize("fail_child", [False, True])
+def test_nested_pdf_splits_preserve_pages_and_clean_temporary_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fail_child: bool
+) -> None:
+    client = _mock_client(monkeypatch)
+    source = tmp_path / "meeting.pdf"
+    original = _pdf_bytes(9)
+    source.write_bytes(original)
+    uploaded_pages: list[int] = []
+    successful_pages: list[int] = []
+    temporary_paths: list[Path] = []
+    upload_count = 0
+
+    def upload(*, file: BinaryIO) -> SimpleNamespace:
+        nonlocal uploaded_pages, upload_count
+        assert isinstance(file, BufferedReader)
+        uploaded_pages = [int(page.mediabox.width) for page in PdfReader(file).pages]
+        part = Path(file.name)
+        assert part.is_file()
+        if part != source:
+            assert part.is_relative_to(tmp_path)
+            temporary_paths.append(part)
+        upload_count += 1
+        return SimpleNamespace(id=f"file_{upload_count}")
+
+    def summarize(**_kwargs: object) -> SimpleNamespace:
+        if len(uploaded_pages) > 2:
+            raise _bad_request("prompt is too long")
+        if fail_child:
+            raise _bad_request("invalid model")
+        successful_pages.extend(uploaded_pages)
+        return SimpleNamespace(content=[BetaTextBlock(type="text", text="Part summary")])
+
+    client.beta.files.upload.side_effect = upload
+    client.beta.messages.create.side_effect = summarize
+    if fail_child:
+        with pytest.raises(anthropic.BadRequestError, match="invalid model"):
+            summarizer.summarize_pdf(str(source), "minutes")
+    else:
+        assert summarizer.summarize_pdf(str(source), "minutes") == "Combined summary"
+        assert successful_pages == list(range(100, 109))
+    assert temporary_paths
+    assert not any(part.exists() for part in temporary_paths)
+    assert sorted(tmp_path.iterdir()) == [source]
+    assert source.read_bytes() == original
+    assert client.beta.files.delete.call_count == upload_count
+
+
+def test_empty_pdf_fails_without_upload(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    client = _mock_client(monkeypatch)
+    path = tmp_path / "empty.pdf"
+    path.write_bytes(_pdf_bytes(0))
+    with pytest.raises(ValueError, match="no pages"):
+        summarizer.summarize_pdf(str(path), "agenda")
+    client.beta.files.upload.assert_not_called()
 
 
 @pytest.mark.parametrize(

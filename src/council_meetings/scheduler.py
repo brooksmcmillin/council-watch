@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from council_meetings.config import settings
+from council_meetings.diagnostics import log_memory
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,9 @@ def run_pipeline(years: list[int] | None = None) -> None:
     # 1. Scrape
     from council_meetings.scraper import scrape_meetings
 
+    log_memory("scrape.start")
     log = scrape_meetings(years=years)
+    log_memory("scrape.complete")
     logger.info(
         "Scrape done: %d meetings found, %d new documents, %d revised",
         log.meetings_found,
@@ -32,13 +35,17 @@ def run_pipeline(years: list[int] | None = None) -> None:
     # 2. Summarize
     from council_meetings.summarizer import summarize_unsummarized
 
+    log_memory("summarize.start")
     count = summarize_unsummarized()
+    log_memory("summarize.complete")
     logger.info("Summarized %d documents", count)
 
     # 3. Notify
     from council_meetings.notifier import notify_new_summaries
 
+    log_memory("notify.start")
     notified = notify_new_summaries()
+    log_memory("notify.complete")
     logger.info("Notified %d documents", notified)
 
     logger.info("Pipeline complete")

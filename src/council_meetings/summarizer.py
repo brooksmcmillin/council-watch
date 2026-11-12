@@ -1,9 +1,10 @@
 """Summarize council meeting PDFs using Claude API with native PDF support."""
 
+import gc
 import logging
 from datetime import UTC, datetime
-from io import BytesIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import anthropic
 from anthropic.types import Message, TextBlock
@@ -13,6 +14,7 @@ from sqlalchemy import or_
 
 from council_meetings.config import city, settings
 from council_meetings.db import SessionLocal
+from council_meetings.diagnostics import log_memory
 from council_meetings.models import Document
 
 logger = logging.getLogger(__name__)
@@ -63,9 +65,9 @@ def _input_too_large(error: anthropic.BadRequestError) -> bool:
     return "prompt is too long" in message or "maximum of 600 PDF pages" in message
 
 
-def _request_pdf(client: anthropic.Anthropic, data: bytes, doc_type: str) -> str:
-    with BytesIO(data) as pdf_file:
-        pdf_file.name = "meeting.pdf"
+def _request_pdf(client: anthropic.Anthropic, path: Path, doc_type: str) -> str:
+    # Pass a handle: the SDK eagerly reads Path inputs, but streams open files.
+    with path.open("rb") as pdf_file:
         uploaded = client.beta.files.upload(file=pdf_file)
 
     try:
@@ -105,29 +107,50 @@ def _combine_summaries(client: anthropic.Anthropic, summaries: list[str], prompt
     )
 
 
-def _summarize_pdf_data(client: anthropic.Anthropic, data: bytes, doc_type: str) -> str:
-    reader = PdfReader(BytesIO(data))
-    page_count = len(reader.pages)
+def _pdf_page_count(path: Path) -> int:
+    with path.open("rb") as source, PdfReader(source) as reader:
+        return len(reader.pages)
+
+
+def _split_pdf(path: Path, directory: Path, page_count: int) -> list[Path]:
+    parts = []
+    midpoint = page_count // 2
+    with path.open("rb") as source, PdfReader(source) as reader:
+        for index, (start, stop) in enumerate(((0, midpoint), (midpoint, page_count))):
+            part = directory / f"part-{index}.pdf"
+            writer = PdfWriter()
+            for page in reader.pages[start:stop]:
+                writer.add_page(page)
+            with part.open("wb") as output:
+                writer.write(output)
+            parts.append(part)
+            # PdfWriter.close() is a no-op; its page graph contains cycles.
+            del writer
+            gc.collect()
+    return parts
+
+
+def _summarize_pdf_path(client: anthropic.Anthropic, path: Path, doc_type: str) -> str:
+    page_count = _pdf_page_count(path)
     if not page_count:
         raise ValueError("Cannot summarize a PDF with no pages")
     if page_count <= 600:
         try:
-            return _request_pdf(client, data, doc_type)
+            return _request_pdf(client, path, doc_type)
         except anthropic.BadRequestError as error:
             if not _input_too_large(error):
                 raise
             if page_count == 1:
                 raise ValueError("A single PDF page exceeds the model input limit") from error
 
-    midpoint = page_count // 2
-    summaries = []
-    for start, stop in ((0, midpoint), (midpoint, page_count)):
-        writer = PdfWriter()
-        for page in reader.pages[start:stop]:
-            writer.add_page(page)
-        with BytesIO() as part:
-            writer.write(part)
-            summaries.append(_summarize_pdf_data(client, part.getvalue(), doc_type))
+    # Keep split bytes on the PDF volume, not /tmp (which may be memory-backed).
+    log_memory("pdf.split.start")
+    with TemporaryDirectory(prefix="summary-", dir=path.parent) as directory:
+        parts = _split_pdf(path, Path(directory), page_count)
+        # Release the parent parser and its cached streams before processing children.
+        gc.collect()
+        log_memory("pdf.split.complete")
+        summaries = [_summarize_pdf_path(client, part, doc_type) for part in parts]
     return _combine_summaries(client, summaries, _prompt_for(doc_type))
 
 
@@ -137,7 +160,7 @@ def summarize_pdf(pdf_path: str, doc_type: str) -> str:
     if not path.exists():
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
     with anthropic.Anthropic(api_key=settings.anthropic_api_key) as client:
-        return _summarize_pdf_data(client, path.read_bytes(), doc_type)
+        return _summarize_pdf_path(client, path, doc_type)
 
 
 def _request_text(client: anthropic.Anthropic, text: str, prompt: str) -> str:
@@ -210,6 +233,7 @@ def summarize_unsummarized() -> int:
         for doc in docs:
             try:
                 logger.info("Summarizing document (id=%d, type=%s)", doc.id, doc.doc_type)
+                log_memory("document.start", doc.id)
                 if doc.pdf_path:
                     summary = summarize_pdf(doc.pdf_path, doc.doc_type)
                 elif doc.text_content:
@@ -222,8 +246,10 @@ def summarize_unsummarized() -> int:
                 db.commit()
                 count += 1
                 logger.info("Summarized document %d", doc.id)
+                log_memory("document.complete", doc.id)
             except Exception as e:
                 db.rollback()
+                log_memory("document.failed", doc.id)
                 logger.error("Failed to summarize document %d: %s", doc.id, e)
 
         return count
