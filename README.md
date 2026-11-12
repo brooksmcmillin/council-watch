@@ -32,6 +32,10 @@ A single FastAPI process serves the site and runs an in-process
    HTML text to the Anthropic API (`SUMMARIZATION_MODEL`, default `claude-sonnet-5`)
    and stores a plain-language summary. HTML-based summaries explicitly exclude
    linked attachments/staff reports; they are not full-package PDF summaries.
+   Oversized PDFs are split into consecutive page ranges (without dropping pages);
+   text inputs are split when the provider rejects their size. Partial summaries
+   are combined into one final summary, requiring additional API calls. A single
+   PDF page that still exceeds the input limit remains a visible failure.
 3. **Notify** (`notifier.py`) — emails confirmed subscribers over SMTP and posts
    to Bluesky. Each channel is skipped unless it's configured.
 

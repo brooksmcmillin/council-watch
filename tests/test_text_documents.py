@@ -1,6 +1,6 @@
 from datetime import date
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 from anthropic.types import TextBlock
@@ -16,7 +16,8 @@ from council_meetings.models import Document, Meeting
 def test_html_text_uses_messages_not_pdf_upload(
     monkeypatch: pytest.MonkeyPatch, doc_type: str
 ) -> None:
-    api = Mock()
+    api = MagicMock()
+    api.__enter__.return_value = api
     api.messages.create.return_value = SimpleNamespace(
         content=[TextBlock(type="text", text="Fixture summary")]
     )

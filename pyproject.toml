@@ -20,6 +20,7 @@ dependencies = [
     "atproto>=0.0.56",
     "apscheduler>=3.10,<4",
     "python-multipart>=0.0.32",
+    "pypdf>=6",
 ]
 
 [dependency-groups]
