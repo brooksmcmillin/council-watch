@@ -208,6 +208,21 @@ are removed on normal success or exception. An uncatchable process kill may leav
 I/O. See [the offline profile and production limits](docs/pdf-memory.md) before
 changing resource limits or claiming production recovery.
 
+### Empty summary diagnostics
+
+If a provider response has no usable text, the summarizer logs a WARNING with
+`stop_reason`, SDK content-block class names, and input/output token counts before
+raising the existing error. Unknown stop reasons become `unknown`; absent or
+non-integer token counts become `None`. Response bodies, thinking, tool inputs,
+stop sequences and arbitrary extra fields are not logged. Successful responses
+do not emit this diagnostic; the change adds no requests or retries.
+
+Inspect the warning alongside the following document failure in an already
+scheduled run. HTTP 200 and scheduler success do not prove a summary was saved.
+For example, `max_tokens` with only thinking blocks suggests output exhaustion;
+it does not by itself prove that increasing the limit will fix the document.
+Do not trigger the paid summarize/notify pipeline just to obtain diagnostics.
+
 ### Repair rollout notes
 
 Apply the additive `text_content` migration (`uv run alembic upgrade head`) before

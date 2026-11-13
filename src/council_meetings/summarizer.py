@@ -56,6 +56,29 @@ def _response_text(message: Message | BetaMessage) -> str:
         block.text for block in message.content if isinstance(block, (TextBlock, BetaTextBlock))
     ).strip()
     if not text:
+        # SDK responses can carry unknown values; never log raw response fields or bodies.
+        stop_reason = getattr(message, "stop_reason", None)
+        if not isinstance(stop_reason, str) or stop_reason not in {
+            "end_turn",
+            "max_tokens",
+            "stop_sequence",
+            "tool_use",
+            "pause_turn",
+            "refusal",
+            "model_context_window_exceeded",
+        }:
+            stop_reason = "unknown"
+        usage = getattr(message, "usage", None)
+        input_tokens = getattr(usage, "input_tokens", None)
+        output_tokens = getattr(usage, "output_tokens", None)
+        logger.warning(
+            "Empty summarization response: stop_reason=%s block_types=%s "
+            "input_tokens=%s output_tokens=%s",
+            stop_reason,
+            [type(block).__name__ for block in message.content],
+            input_tokens if type(input_tokens) is int else None,
+            output_tokens if type(output_tokens) is int else None,
+        )
         raise ValueError("Summarization response contained no text")
     return text
 
