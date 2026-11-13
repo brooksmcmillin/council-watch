@@ -8,7 +8,7 @@ import anthropic
 import httpx
 import pytest
 from anthropic.types import Message, TextBlock, ThinkingBlock
-from anthropic.types.beta import BetaTextBlock, BetaThinkingBlock
+from anthropic.types.beta import BetaMessage, BetaTextBlock, BetaThinkingBlock
 from pypdf import PdfReader, PdfWriter
 
 from council_meetings import summarizer
@@ -143,6 +143,82 @@ def test_response_ignores_thinking_and_joins_text(beta: bool) -> None:
 def test_response_without_text_fails(content: list[object]) -> None:
     with pytest.raises(ValueError, match="contained no text"):
         summarizer._response_text(cast(Message, SimpleNamespace(content=content)))
+
+
+@pytest.mark.parametrize("beta", [False, True])
+@pytest.mark.parametrize("stop_reason", ["max_tokens", "refusal", "end_turn", "tool_use"])
+def test_empty_response_logs_only_diagnostic_metadata(
+    beta: bool, stop_reason: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    message_type = BetaMessage if beta else Message
+    message = message_type.model_validate(
+        {
+            "id": "private-message-id",
+            "type": "message",
+            "role": "assistant",
+            "model": "private-model-field",
+            "stop_reason": stop_reason,
+            "stop_sequence": "private-stop-sequence",
+            "content": [
+                {"type": "thinking", "thinking": "private-thinking", "signature": "private-sig"},
+                {
+                    "type": "tool_use",
+                    "id": "private-tool-id",
+                    "name": "private-tool-name",
+                    "input": {"payload": "private-tool-input"},
+                },
+                {"type": "text", "text": " "},
+            ],
+            "usage": {"input_tokens": 321, "output_tokens": 2048},
+            "extra": "private-extra-field",
+        }
+    )
+
+    with pytest.raises(ValueError, match="^Summarization response contained no text$"):
+        summarizer._response_text(message)
+
+    records = [r for r in caplog.records if r.name == summarizer.__name__]
+    assert len(records) == 1
+    assert records[0].levelname == "WARNING"
+    diagnostic = records[0].getMessage()
+    assert f"stop_reason={stop_reason}" in diagnostic
+    prefix = "Beta" if beta else ""
+    for block in ("ThinkingBlock", "ToolUseBlock", "TextBlock"):
+        assert f"{prefix}{block}" in diagnostic
+    assert "input_tokens=321 output_tokens=2048" in diagnostic
+    assert "private-" not in caplog.text
+
+
+@pytest.mark.parametrize("stop_reason", [None, "private-invalid-reason", {"private": "value"}])
+@pytest.mark.parametrize(
+    ("input_tokens", "output_tokens"),
+    [("private-input-tokens", {"private": "value"}), (True, False), (False, True), (None, None)],
+)
+def test_empty_response_metadata_tolerates_missing_or_unknown_fields(
+    stop_reason: object,
+    input_tokens: object,
+    output_tokens: object,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    message = SimpleNamespace(
+        content=[],
+        stop_reason=stop_reason,
+        usage=SimpleNamespace(input_tokens=input_tokens, output_tokens=output_tokens),
+    )
+    with pytest.raises(ValueError, match="contained no text"):
+        summarizer._response_text(cast(Message, message))
+    assert "stop_reason=unknown block_types=[] input_tokens=None output_tokens=None" in caplog.text
+    assert "private" not in caplog.text
+
+
+@pytest.mark.parametrize("beta", [False, True])
+def test_successful_response_has_no_empty_response_diagnostic(
+    beta: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    text_type = BetaTextBlock if beta else TextBlock
+    message = SimpleNamespace(content=[text_type(type="text", text="Useful summary")])
+    assert summarizer._response_text(cast(Message, message)) == "Useful summary"
+    assert not [r for r in caplog.records if r.name == summarizer.__name__]
 
 
 def test_summarization_model_has_sensible_default() -> None:
