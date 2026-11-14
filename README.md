@@ -82,6 +82,14 @@ uv run alembic upgrade head  # create data/council.db
 uv run uvicorn council_meetings.main:app --reload --no-proxy-headers
 ```
 
+Startup checks existing tables for missing ORM columns before starting the scheduler.
+If it reports an out-of-date schema, stop the app, make a consistent SQLite backup
+(for example, `sqlite3 data/council.db ".backup 'data/council-before-upgrade.db'"`),
+then run `uv run alembic upgrade head` and restart. Alembic uses `sqlalchemy.url`
+in `alembic.ini`; if you override `DATABASE_URL`, make sure both target the same
+database. Startup does not migrate existing tables automatically. Docker already
+runs migrations before starting the app.
+
 The site is then at <http://localhost:8000>. Starting the app also starts the
 scheduler, so the first pipeline run happens one interval later. To run the
 scraper on its own without waiting:

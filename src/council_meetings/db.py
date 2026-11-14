@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import sessionmaker
 
 from council_meetings.config import settings
@@ -20,7 +20,28 @@ SessionLocal = sessionmaker(bind=engine)
 
 
 def init_db() -> None:
-    """Create all tables (used for initial setup / tests)."""
+    """Initialize fresh databases; reject existing tables that need migrations."""
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    missing_columns = []
+    for table in Base.metadata.sorted_tables:
+        if table.name not in existing_tables:
+            continue
+        existing_columns = {column["name"] for column in inspector.get_columns(table.name)}
+        missing_columns.extend(
+            f"{table.name}.{column.name}"
+            for column in table.columns
+            if column.name not in existing_columns
+        )
+    if missing_columns:
+        raise RuntimeError(
+            "Database schema is out of date; missing columns: "
+            + ", ".join(sorted(missing_columns))
+            + ". Stop the app and back up the database, then run "
+            "`uv run alembic upgrade head` from the project directory against the same "
+            "database (check sqlalchemy.url in alembic.ini). Restart the app afterward. "
+            "Startup has not migrated the database."
+        )
     Base.metadata.create_all(engine)
 
 
