@@ -171,6 +171,11 @@ def test_empty_response_logs_only_diagnostic_metadata(
             ],
             "usage": {"input_tokens": 321, "output_tokens": 2048},
             "extra": "private-extra-field",
+            "stop_details": {
+                "category": "general_harms",
+                "explanation": "private-refusal-explanation",
+                "recommended_model": "private-recommended-model",
+            },
         }
     )
 
@@ -186,6 +191,8 @@ def test_empty_response_logs_only_diagnostic_metadata(
     for block in ("ThinkingBlock", "ToolUseBlock", "TextBlock"):
         assert f"{prefix}{block}" in diagnostic
     assert "input_tokens=321 output_tokens=2048" in diagnostic
+    category = "general_harms" if stop_reason == "refusal" else "not_applicable"
+    assert f"refusal_category={category} request_id=unavailable" in diagnostic
     assert "private-" not in caplog.text
 
 
@@ -219,6 +226,77 @@ def test_successful_response_has_no_empty_response_diagnostic(
     message = SimpleNamespace(content=[text_type(type="text", text="Useful summary")])
     assert summarizer._response_text(cast(Message, message)) == "Useful summary"
     assert not [r for r in caplog.records if r.name == summarizer.__name__]
+
+
+@pytest.mark.parametrize("beta", [False, True])
+@pytest.mark.parametrize(
+    ("details", "expected"),
+    [
+        (None, "unavailable"),
+        ({}, "unavailable"),
+        ({"category": None}, "unspecified"),
+        (SimpleNamespace(category="bio", explanation="private-explanation"), "bio"),
+        *[
+            ({"category": category}, category)
+            for category in (
+                "cyber",
+                "bio",
+                "frontier_llm",
+                "reasoning_extraction",
+                "general_harms",
+            )
+        ],
+        ({"category": "private-unknown-category"}, "unknown"),
+        ({"category": {"private-key": "private-value"}}, "unknown"),
+        ({"category": True}, "unknown"),
+    ],
+)
+def test_refusal_category_is_allowlisted(
+    beta: bool, details: object, expected: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    message_type = BetaMessage if beta else Message
+    message = message_type.model_validate(
+        {
+            "id": "synthetic-message",
+            "type": "message",
+            "role": "assistant",
+            "model": "synthetic-model",
+            "content": [],
+            "stop_reason": "refusal",
+            "usage": {"input_tokens": 1, "output_tokens": 0},
+            "stop_details": details,
+        }
+    )
+    with pytest.raises(ValueError, match="contained no text"):
+        summarizer._response_text(message)
+    assert f"refusal_category={expected}" in caplog.text
+    assert "private-" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("request_id", "expected"),
+    [
+        ("req_Abc-123_xyz", "req_Abc-123_xyz"),
+        ("req_" + "a" * 124, "req_" + "a" * 124),
+        (None, "unavailable"),
+        (True, "unavailable"),
+        ({"private": "value"}, "unavailable"),
+        ("private-unknown-id", "unavailable"),
+        ("req_abc\nprivate-forged-log", "unavailable"),
+        ("req_abc private-value", "unavailable"),
+        ("req_abcé", "unavailable"),
+        ("req_", "unavailable"),
+        ("req_" + "a" * 125, "unavailable"),
+    ],
+)
+def test_request_id_is_bounded_log_safe_metadata(
+    request_id: object, expected: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    message = SimpleNamespace(content=[], stop_reason="refusal", _request_id=request_id)
+    with pytest.raises(ValueError, match="contained no text"):
+        summarizer._response_text(cast(Message, message))
+    assert f"request_id={expected}" in caplog.text
+    assert "private" not in caplog.text
 
 
 def test_summarization_model_has_sensible_default() -> None:

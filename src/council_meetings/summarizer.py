@@ -2,6 +2,7 @@
 
 import gc
 import logging
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -68,16 +69,44 @@ def _response_text(message: Message | BetaMessage) -> str:
             "model_context_window_exceeded",
         }:
             stop_reason = "unknown"
+        category = "not_applicable"
+        if stop_reason == "refusal":
+            details = getattr(message, "stop_details", None)
+            category = (
+                details.get("category", "unavailable")
+                if isinstance(details, dict)
+                else getattr(details, "category", "unavailable")
+            )
+            if category is None:
+                category = "unspecified"
+            elif not isinstance(category, str) or category not in {
+                "cyber",
+                "bio",
+                "frontier_llm",
+                "reasoning_extraction",
+                "general_harms",
+                "unavailable",
+            }:
+                category = "unknown"
+        request_id = getattr(message, "_request_id", None)
+        if (
+            not isinstance(request_id, str)
+            or len(request_id) > 128
+            or not re.fullmatch(r"req_[A-Za-z0-9_-]+", request_id)
+        ):
+            request_id = "unavailable"
         usage = getattr(message, "usage", None)
         input_tokens = getattr(usage, "input_tokens", None)
         output_tokens = getattr(usage, "output_tokens", None)
         logger.warning(
             "Empty summarization response: stop_reason=%s block_types=%s "
-            "input_tokens=%s output_tokens=%s",
+            "input_tokens=%s output_tokens=%s refusal_category=%s request_id=%s",
             stop_reason,
             [type(block).__name__ for block in message.content],
             input_tokens if type(input_tokens) is int else None,
             output_tokens if type(output_tokens) is int else None,
+            category,
+            request_id,
         )
         raise ValueError("Summarization response contained no text")
     return text
@@ -255,7 +284,13 @@ def summarize_unsummarized() -> int:
         count = 0
         for doc in docs:
             try:
-                logger.info("Summarizing document (id=%d, type=%s)", doc.id, doc.doc_type)
+                logger.info(
+                    "Summarizing document (id=%d, type=%s) public_meeting=/meeting/%d source=%s",
+                    doc.id,
+                    doc.doc_type,
+                    doc.meeting_id,
+                    "pdf" if doc.pdf_path else "html",
+                )
                 log_memory("document.start", doc.id)
                 if doc.pdf_path:
                     summary = summarize_pdf(doc.pdf_path, doc.doc_type)

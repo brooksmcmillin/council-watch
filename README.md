@@ -213,9 +213,22 @@ changing resource limits or claiming production recovery.
 If a provider response has no usable text, the summarizer logs a WARNING with
 `stop_reason`, SDK content-block class names, and input/output token counts before
 raising the existing error. Unknown stop reasons become `unknown`; absent or
-non-integer token counts become `None`. Response bodies, thinking, tool inputs,
-stop sequences and arbitrary extra fields are not logged. Successful responses
-do not emit this diagnostic; the change adds no requests or retries.
+non-integer token counts become `None`. Refusals also report an allowlisted
+`refusal_category` from the provider's `stop_details`: `cyber`, `bio`,
+`frontier_llm`, `reasoning_extraction`, or `general_harms`. Missing categories
+become `unavailable`, explicit null becomes `unspecified`, and unrecognized
+values become `unknown`; other stop reasons use `not_applicable`. A provider
+`request_id` is logged only when it matches `req_` plus ASCII letters, digits,
+underscores or hyphens, with at most 128 characters total; otherwise it is
+`unavailable`. It can be supplied to provider support for investigation.
+
+Each document-start log includes its public `/meeting/<id>` path and selected
+`pdf` or `html` source kind. Document IDs and meeting IDs are different: use that
+mapping to find the original agenda/minutes link on the public meeting page.
+Source URLs, local filenames, response bodies, refusal explanations, thinking,
+tool inputs, stop sequences and arbitrary extra fields are not logged.
+Successful responses do not emit the empty-response diagnostic. These fields
+add no requests or retries and do not change summary eligibility or persistence.
 
 Inspect the warning alongside the following document failure in an already
 scheduled run. HTTP 200 and scheduler success do not prove a summary was saved.

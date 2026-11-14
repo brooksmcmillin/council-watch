@@ -73,6 +73,48 @@ def test_text_eligibility_failure_retry_and_pdf_path(
     assert db_session.query(Document).filter(Document.summarized_at.isnot(None)).count() == 3
 
 
+@pytest.mark.parametrize("pdf_path", [None, "private-path.pdf"])
+def test_failed_document_logs_public_mapping_not_source_contents(
+    pdf_path: str | None,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    meeting = Meeting(
+        id=35,
+        date=date(2025, 2, 4),
+        title="Fixture meeting",
+        civicplus_id="fixture",
+        url_date_slug="fixture",
+    )
+    document = Document(
+        id=67,
+        meeting=meeting,
+        doc_type="agenda",
+        pdf_path=pdf_path,
+        source_url="https://example.com/private-source?token=private-token",
+        text_content="private-document-text",
+    )
+    db_session.add(document)
+    db_session.commit()
+    monkeypatch.setattr(summarizer, "SessionLocal", sessionmaker(bind=db_session.get_bind()))
+    monkeypatch.setattr(settings, "anthropic_api_key", "fixture-key")
+    pdf = Mock(side_effect=ValueError("Summarization response contained no text"))
+    text = Mock(side_effect=ValueError("Summarization response contained no text"))
+    monkeypatch.setattr(summarizer, "summarize_pdf", pdf)
+    monkeypatch.setattr(summarizer, "summarize_text", text)
+    caplog.set_level("INFO", logger=summarizer.__name__)
+    assert summarizer.summarize_unsummarized() == 0
+    source = "pdf" if pdf_path else "html"
+    assert f"id=67, type=agenda) public_meeting=/meeting/35 source={source}" in caplog.text
+    assert "private" not in caplog.text
+    assert pdf.call_count == int(pdf_path is not None)
+    assert text.call_count == int(pdf_path is None)
+    db_session.expire_all()
+    saved = db_session.get(Document, 67)
+    assert saved is not None and saved.summary is None
+
+
 def test_missing_key_never_calls_html_api(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "anthropic_api_key", "")
     api = Mock()
