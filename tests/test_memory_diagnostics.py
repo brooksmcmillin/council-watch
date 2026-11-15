@@ -72,7 +72,12 @@ def test_pipeline_memory_stage_order(monkeypatch: pytest.MonkeyPatch, failed: bo
 @pytest.mark.parametrize("failed", [False, True])
 def test_document_memory_boundaries(monkeypatch: pytest.MonkeyPatch, failed: bool) -> None:
     document = SimpleNamespace(
-        id=42, meeting_id=7, doc_type="agenda", pdf_path=None, text_content="source data"
+        id=42,
+        meeting_id=7,
+        doc_type="agenda",
+        pdf_path=None,
+        text_content="source data",
+        summary_refused_hash=None,
     )
     db = Mock()
     db.query.return_value.filter.return_value.all.return_value = [document]

@@ -1,4 +1,5 @@
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
 
@@ -34,8 +35,10 @@ def test_html_text_uses_messages_not_pdf_upload(
 
 
 def test_text_eligibility_failure_retry_and_pdf_path(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
+    db_session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    pdf_path = tmp_path / "fixture.pdf"
+    pdf_path.write_bytes(b"%PDF-fixture")
     meeting = Meeting(
         date=date(2026, 11, 2),
         title="Regular",
@@ -47,7 +50,7 @@ def test_text_eligibility_failure_retry_and_pdf_path(
     for kwargs in [
         {"text_content": "First agenda"},
         {"text_content": "Second minutes"},
-        {"pdf_path": "fixture.pdf"},
+        {"pdf_path": str(pdf_path)},
         {},
         {"text_content": "Already summarized", "summary": "Keep this"},
     ]:
@@ -63,7 +66,7 @@ def test_text_eligibility_failure_retry_and_pdf_path(
     monkeypatch.setattr(summarizer, "summarize_pdf", pdf)
     assert summarizer.summarize_unsummarized() == 2
     assert text.call_count == 2
-    pdf.assert_called_once_with("fixture.pdf", "agenda")
+    pdf.assert_called_once_with(str(pdf_path), "agenda")
     assert db_session.query(Document).filter_by(summary="Keep this").count() == 1
     text.side_effect = None
     text.return_value = "Retried summary"
@@ -79,7 +82,12 @@ def test_failed_document_logs_public_mapping_not_source_contents(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
 ) -> None:
+    if pdf_path:
+        path = tmp_path / pdf_path
+        path.write_bytes(b"%PDF-fixture")
+        pdf_path = str(path)
     meeting = Meeting(
         id=35,
         date=date(2025, 2, 4),

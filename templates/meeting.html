@@ -37,7 +37,13 @@
     </section>
     {% endif %}
 
-    {% if not (agenda and agenda.summary) and not (minutes and minutes.summary) %}
+    {% for doc, label in [(agenda, 'Agenda'), (minutes, 'Minutes')] %}
+    {% if doc and not doc.summary and doc.summary_refused_hash %}
+    <p class="summary-unavailable">{{ label }} summary unavailable: the summarization provider declined this document. Automatic retries are paused for the unchanged source.</p>
+    {% endif %}
+    {% endfor %}
+
+    {% if not (agenda and agenda.summary) and not (minutes and minutes.summary) and not (agenda and agenda.summary_refused_hash) and not (minutes and minutes.summary_refused_hash) %}
     <p>No summaries available yet. Summaries are generated automatically and should appear soon.</p>
     {% endif %}
 </article>
