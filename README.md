@@ -139,6 +139,30 @@ uv run pyright src/
 uv run pytest -q
 ```
 
+### Provider-refused summaries
+
+An explicit provider refusal leaves the summary unset and persists a fingerprint
+of the selected PDF bytes or HTML text. Scheduled runs skip that unchanged source,
+including after restart or model-setting changes; changed source content is
+eligible again. Transient errors and empty non-refusal responses remain retryable.
+Refused documents stay linked on their meeting page with an omission notice and
+never become notification candidates merely because they were quarantined.
+
+For an existing, operator-confirmed refusal, seed the marker **without model calls**
+after applying migrations and before the next scheduled pipeline:
+
+```bash
+uv run python -m council_meetings.summarizer --quarantine-refusal DOCUMENT_ID
+```
+
+This command requires database write authority. It rejects already summarized
+or source-less documents and changes no summary, meeting ID or delivery flag.
+Do not use the bare module command for this operation: without the flag it runs
+paid summarization. Deployment does not seed historical refusals automatically.
+Keep any recovery/replay audience and spending authorization separate; do not
+reset historical notification flags. Quarantine is a recorded provider refusal,
+not a claim that the source is irretrievable or successfully summarized.
+
 ## Configuration
 
 Configuration is entirely environment variables, read via pydantic-settings from

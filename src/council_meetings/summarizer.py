@@ -1,6 +1,8 @@
 """Summarize council meeting PDFs using Claude API with native PDF support."""
 
+import argparse
 import gc
+import hashlib
 import logging
 import re
 from datetime import UTC, datetime
@@ -52,11 +54,15 @@ def _prompt_for(doc_type: str) -> str:
     return template.format(location=city.location)
 
 
+class SummaryRefusedError(ValueError):
+    """The provider explicitly declined this document; do not retry unchanged input."""
+
+
 def _response_text(message: Message | BetaMessage) -> str:
     text = "\n\n".join(
         block.text for block in message.content if isinstance(block, (TextBlock, BetaTextBlock))
     ).strip()
-    if not text:
+    if not text or getattr(message, "stop_reason", None) == "refusal":
         # SDK responses can carry unknown values; never log raw response fields or bodies.
         stop_reason = getattr(message, "stop_reason", None)
         if not isinstance(stop_reason, str) or stop_reason not in {
@@ -99,7 +105,7 @@ def _response_text(message: Message | BetaMessage) -> str:
         input_tokens = getattr(usage, "input_tokens", None)
         output_tokens = getattr(usage, "output_tokens", None)
         logger.warning(
-            "Empty summarization response: stop_reason=%s block_types=%s "
+            "Unusable summarization response: stop_reason=%s block_types=%s "
             "input_tokens=%s output_tokens=%s refusal_category=%s request_id=%s",
             stop_reason,
             [type(block).__name__ for block in message.content],
@@ -108,6 +114,12 @@ def _response_text(message: Message | BetaMessage) -> str:
             category,
             request_id,
         )
+        if stop_reason == "refusal":
+            raise SummaryRefusedError(
+                "Provider refused summarization"
+                if text
+                else "Summarization response contained no text"
+            )
         raise ValueError("Summarization response contained no text")
     return text
 
@@ -142,10 +154,13 @@ def _request_pdf(client: anthropic.Anthropic, path: Path, doc_type: str) -> str:
                 }
             ],
         )
+        return _response_text(message)
     finally:
-        client.beta.files.delete(uploaded.id)
-
-    return _response_text(message)
+        # Cleanup must not mask a refusal or repeat successful model work.
+        try:
+            client.beta.files.delete(uploaded.id)
+        except Exception:
+            logger.warning("Could not delete uploaded summarization source")
 
 
 def _combine_summaries(client: anthropic.Anthropic, summaries: list[str], prompt: str) -> str:
@@ -256,6 +271,26 @@ def summarize_text(text: str, doc_type: str) -> str:
         return _summarize_text(client, text, prompt)
 
 
+def _source_fingerprint(doc: Document) -> str:
+    if doc.pdf_path:
+        with Path(doc.pdf_path).open("rb") as source:
+            return "pdf:" + hashlib.file_digest(source, "sha256").hexdigest()
+    if doc.text_content:
+        return "html:" + hashlib.sha256(doc.text_content.encode()).hexdigest()
+    raise ValueError("Document has no summarizable source")
+
+
+def quarantine_refused_document(document_id: int) -> None:
+    """Record an operator-confirmed refusal without any provider call or notification."""
+    with SessionLocal() as db:
+        doc = db.get(Document, document_id)
+        if doc is None or doc.summary is not None:
+            raise ValueError("Expected an existing document without a summary")
+        doc.summary_refused_hash = _source_fingerprint(doc)
+        db.commit()
+        logger.info("Quarantined provider-refused document %d", document_id)
+
+
 def summarize_unsummarized() -> int:
     """Find and summarize all documents that don't have summaries yet.
 
@@ -284,6 +319,16 @@ def summarize_unsummarized() -> int:
         count = 0
         for doc in docs:
             try:
+                if not doc.pdf_path and not doc.text_content:
+                    continue
+                fingerprint = _source_fingerprint(doc)
+                if doc.summary_refused_hash == fingerprint:
+                    logger.info(
+                        "Skipping unchanged provider-refused document %d public_meeting=/meeting/%d",
+                        doc.id,
+                        doc.meeting_id,
+                    )
+                    continue
                 logger.info(
                     "Summarizing document (id=%d, type=%s) public_meeting=/meeting/%d source=%s",
                     doc.id,
@@ -292,13 +337,26 @@ def summarize_unsummarized() -> int:
                     "pdf" if doc.pdf_path else "html",
                 )
                 log_memory("document.start", doc.id)
-                if doc.pdf_path:
-                    summary = summarize_pdf(doc.pdf_path, doc.doc_type)
-                elif doc.text_content:
-                    summary = summarize_text(doc.text_content, doc.doc_type)
-                else:
+                try:
+                    if doc.pdf_path:
+                        summary = summarize_pdf(doc.pdf_path, doc.doc_type)
+                    elif doc.text_content:
+                        summary = summarize_text(doc.text_content, doc.doc_type)
+                    else:
+                        continue
+                except SummaryRefusedError:
+                    db.rollback()
+                    doc.summary_refused_hash = fingerprint
+                    db.commit()
+                    log_memory("document.failed", doc.id)
+                    logger.warning(
+                        "Quarantined provider-refused document %d public_meeting=/meeting/%d",
+                        doc.id,
+                        doc.meeting_id,
+                    )
                     continue
                 doc.summary = summary
+                doc.summary_refused_hash = None
                 doc.summary_model = settings.summarization_model
                 doc.summarized_at = datetime.now(UTC)
                 db.commit()
@@ -315,7 +373,22 @@ def summarize_unsummarized() -> int:
         db.close()
 
 
-if __name__ == "__main__":
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--quarantine-refusal",
+        type=int,
+        metavar="DOCUMENT_ID",
+        help="record an operator-confirmed provider refusal without making model calls",
+    )
+    args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    count = summarize_unsummarized()
-    print(f"Summarized {count} documents")
+    if args.quarantine_refusal is not None:
+        quarantine_refused_document(args.quarantine_refusal)
+    else:
+        count = summarize_unsummarized()
+        print(f"Summarized {count} documents")
+
+
+if __name__ == "__main__":
+    main()

@@ -512,3 +512,42 @@ def test_legacy_source_links_remain_absolute(client: TestClient, meeting_id: int
         'href="https://www.campbellca.gov/AgendaCenter/ViewFile/Agenda/_10072025-3159"'
         in response.text
     )
+
+
+@pytest.mark.parametrize("with_minutes", [False, True])
+def test_refused_agenda_is_an_explicit_omission(
+    client: TestClient, meeting_id: int, with_minutes: bool
+) -> None:
+    marker = "html:" + "a" * 64
+    for db in app.dependency_overrides[get_db]():
+        db.add(
+            Document(
+                meeting_id=meeting_id,
+                doc_type="agenda",
+                source_url="/agenda",
+                text_content="Source",
+                summary_refused_hash=marker,
+            )
+        )
+        if with_minutes:
+            db.add(
+                Document(
+                    meeting_id=meeting_id,
+                    doc_type="minutes",
+                    source_url="/minutes",
+                    summary="Existing minutes summary",
+                )
+            )
+        db.commit()
+    response = client.get(f"/meeting/{meeting_id}")
+    soup = BeautifulSoup(response.text, "html.parser")
+    notice = soup.select_one(".summary-unavailable")
+    assert response.status_code == 200
+    assert notice is not None and "Agenda summary unavailable" in notice.get_text()
+    assert "provider declined" in notice.get_text()
+    assert "unchanged source" in notice.get_text()
+    assert "should appear soon" not in soup.get_text()
+    assert marker not in response.text
+    assert ("Existing minutes summary" in soup.get_text()) == with_minutes
+    assert bool(soup.select(".summary-content")) == with_minutes
+    assert any(str(a.get("href", "")).endswith("/agenda") for a in soup.select(".meeting-links a"))

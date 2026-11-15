@@ -47,6 +47,8 @@ class Document(Base):
     pdf_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Fingerprint of the selected source declined by the summarization provider.
+    summary_refused_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     summarized_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     # Set when the source PDF was re-fetched and found to differ from the
     # previously stored copy. Drives a "Revised" indicator in notifications.

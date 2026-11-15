@@ -179,8 +179,10 @@ def test_empty_response_logs_only_diagnostic_metadata(
         }
     )
 
-    with pytest.raises(ValueError, match="^Summarization response contained no text$"):
+    expected_error = summarizer.SummaryRefusedError if stop_reason == "refusal" else ValueError
+    with pytest.raises(expected_error, match="^Summarization response contained no text$") as error:
         summarizer._response_text(message)
+    assert type(error.value) is expected_error
 
     records = [r for r in caplog.records if r.name == summarizer.__name__]
     assert len(records) == 1
@@ -323,6 +325,38 @@ def _mock_client(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     )
     monkeypatch.setattr(summarizer.anthropic, "Anthropic", lambda **_: client)
     return client
+
+
+@pytest.mark.parametrize("outcome", ["refusal", "success", "request_error"])
+def test_pdf_cleanup_failure_preserves_primary_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    outcome: str,
+) -> None:
+    client = _mock_client(monkeypatch)
+    client.beta.files.delete.side_effect = RuntimeError("private-cleanup-error")
+    request_error = _bad_request("invalid model")
+    if outcome == "refusal":
+        client.beta.messages.create.return_value = SimpleNamespace(
+            content=[], stop_reason="refusal"
+        )
+    elif outcome == "request_error":
+        client.beta.messages.create.side_effect = request_error
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"%PDF-fixture")
+    if outcome == "success":
+        assert summarizer._request_pdf(client, source, "agenda") == "PDF summary"
+    elif outcome == "refusal":
+        with pytest.raises(summarizer.SummaryRefusedError):
+            summarizer._request_pdf(client, source, "agenda")
+    else:
+        with pytest.raises(anthropic.BadRequestError) as error:
+            summarizer._request_pdf(client, source, "agenda")
+        assert error.value is request_error
+    client.beta.files.delete.assert_called_once_with("file_test")
+    assert "Could not delete uploaded summarization source" in caplog.text
+    assert "private-cleanup-error" not in caplog.text
 
 
 @pytest.mark.parametrize("page_count", [5, 601])
