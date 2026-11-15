@@ -34,13 +34,17 @@ def test_email_delivery_migration_preserves_archive_and_subscribers(tmp_path: Pa
             )
         )
         subscribers_before = conn.execute(text("SELECT * FROM subscribers")).all()
-        documents_before = conn.execute(text("SELECT * FROM documents")).all()
+        original_documents = conn.execute(text("SELECT * FROM documents"))
+        original_columns = tuple(original_documents.keys())
+        documents_before = original_documents.all()
     command.upgrade(config, "head")
     with engine.connect() as conn:
         assert conn.execute(text("SELECT * FROM subscribers")).all() == subscribers_before
-        rows = conn.execute(text("SELECT * FROM documents")).all()
-        assert [tuple(row[:-1]) for row in rows] == [tuple(row) for row in documents_before]
-        assert [row[-1] for row in rows] == ["[]", "[]"]
+        rows = conn.execute(text("SELECT * FROM documents")).mappings().all()
+        assert [tuple(row[name] for name in original_columns) for row in rows] == [
+            tuple(row) for row in documents_before
+        ]
+        assert [row["email_delivered_to"] for row in rows] == ["[]", "[]"]
     command.downgrade(config, "f5a6b7c8d9e0")  # pragma: allowlist secret
     assert "email_delivered_to" not in {
         col["name"] for col in inspect(engine).get_columns("documents")
