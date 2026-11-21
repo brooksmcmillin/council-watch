@@ -100,10 +100,14 @@ def main() -> int:
     transport = OfflineTransport(args.reject_above_mib * 1024**2)
     client = anthropic.Anthropic(
         api_key="offline-not-a-secret",  # pragma: allowlist secret (offline transport only)
+        base_url="https://offline.example",
         max_retries=0,
         http_client=httpx.Client(transport=transport),
     )
+    # The documented baseline replay uses the SDK constructor directly.
     summarizer.anthropic.Anthropic = lambda **_: client  # type: ignore[assignment]
+    if hasattr(summarizer, "_summarization_client"):
+        summarizer._summarization_client = lambda: client
     start = time.monotonic()
     result: dict[str, Any] = {
         "pdf": args.pdf.name,

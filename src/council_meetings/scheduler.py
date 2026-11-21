@@ -33,12 +33,18 @@ def run_pipeline(years: list[int] | None = None) -> None:
     )
 
     # 2. Summarize
+    from council_meetings.config import GatewayConfigurationError
     from council_meetings.summarizer import summarize_unsummarized
 
     log_memory("summarize.start")
-    count = summarize_unsummarized()
-    log_memory("summarize.complete")
-    logger.info("Summarized %d documents", count)
+    try:
+        count = summarize_unsummarized()
+    except GatewayConfigurationError as error:
+        logger.error("Gateway summarization skipped: %s", error)
+        log_memory("summarize.failed")
+    else:
+        log_memory("summarize.complete")
+        logger.info("Summarized %d documents", count)
 
     # 3. Notify
     from council_meetings.notifier import notify_new_summaries

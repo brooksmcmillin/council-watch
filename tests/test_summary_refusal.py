@@ -30,6 +30,7 @@ def document(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> Document:
     db_session.add(doc)
     db_session.commit()
     monkeypatch.setattr(summarizer, "SessionLocal", sessionmaker(bind=db_session.get_bind()))
+    monkeypatch.setattr(settings, "llm_mode", "direct")
     monkeypatch.setattr(settings, "anthropic_api_key", "offline-fixture")
     return doc
 

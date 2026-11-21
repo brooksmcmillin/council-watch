@@ -82,6 +82,7 @@ def test_document_memory_boundaries(monkeypatch: pytest.MonkeyPatch, failed: boo
     db = Mock()
     db.query.return_value.filter.return_value.all.return_value = [document]
     monkeypatch.setattr(summarizer, "SessionLocal", lambda: db)
+    monkeypatch.setattr(settings, "llm_mode", "direct")
     monkeypatch.setattr(settings, "anthropic_api_key", "offline")
     text = (
         Mock(side_effect=RuntimeError("offline failure"))
