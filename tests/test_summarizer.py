@@ -9,10 +9,17 @@ import httpx
 import pytest
 from anthropic.types import Message, TextBlock, ThinkingBlock
 from anthropic.types.beta import BetaMessage, BetaTextBlock, BetaThinkingBlock
+from pydantic import SecretStr
 from pypdf import PdfReader, PdfWriter
 
 from council_meetings import summarizer
-from council_meetings.config import settings
+from council_meetings.config import Settings, settings
+
+
+@pytest.fixture(autouse=True)
+def _direct_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "llm_mode", "direct")
+    monkeypatch.setattr(settings, "anthropic_api_key", "direct-fixture")
 
 
 class _FakeMessages:
@@ -32,7 +39,7 @@ class _FakeFiles:
     def upload(self, *, file: object) -> object:
         self.recorder["uploaded_file"] = file
         self.recorder["uploaded_content"] = cast(BinaryIO, file).read()
-        return type("Uploaded", (), {"id": "file_test"})()
+        return type("Uploaded", (), {"id": "opaque-test-id"})()
 
     def delete(self, file_id: str) -> None:
         self.recorder["deleted_file_id"] = file_id
@@ -84,11 +91,159 @@ def test_summarize_pdf_uses_configured_model(
     assert summary == "a summary"
     assert recorder["model"] == "claude-test-model"
     assert recorder["uploaded_content"] == data
-    assert recorder["deleted_file_id"] == "file_test"
+    assert recorder["deleted_file_id"] == "opaque-test-id"
     messages = cast(list[dict[str, object]], recorder["messages"])
     content = cast(list[dict[str, object]], messages[0]["content"])
     source = content[0]["source"]
-    assert source == {"type": "file", "file_id": "file_test"}
+    assert source == {"type": "file", "file_id": "opaque-test-id"}
+
+
+@pytest.mark.parametrize("gateway_status", [200, 401, 307])
+def test_native_gateway_pdf_and_text_requests(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, gateway_status: int
+) -> None:
+    monkeypatch.setenv("LLM_MODE", "gateway")
+    monkeypatch.setenv("LLM_GATEWAY_URL", "https://gateway.example/anthropic/")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "project-fixture")
+    if gateway_status == 200:
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "direct-fixture")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "http://wrong-proxy.example:8080")
+    monkeypatch.setenv("https_proxy", "http://wrong-proxy.example:8080")
+    monkeypatch.setenv("SSL_CERT_FILE", "/nonexistent-fixture-ca")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "ambient-provider-token")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://wrong.example")
+    monkeypatch.setattr(summarizer, "settings", Settings(_env_file=None))
+    requests: list[tuple[str, str]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "gateway.example"
+        assert request.headers["x-api-key"] == "project-fixture"
+        assert "authorization" not in request.headers
+        path = request.url.path
+        requests.append((request.method, path))
+        body = request.read()
+        if path.endswith("/files"):
+            assert b"%PDF-" in body
+            return httpx.Response(200, json={"id": "file_fixture"})
+        if request.method == "DELETE":
+            return httpx.Response(200, json={"id": "file_fixture", "type": "file_deleted"})
+        assert path == "/anthropic/v1/messages"
+        if "beta=true" in str(request.url):
+            assert b'"file_id":"file_fixture"' in body
+        else:
+            assert b"public agenda text" in body
+        if gateway_status == 401:
+            return httpx.Response(401, json={"error": {"message": "invalid project key"}})
+        if gateway_status == 307:
+            return httpx.Response(307, headers={"Location": "https://wrong.example"})
+        return httpx.Response(200, json={"content": [{"type": "text", "text": "summary"}]})
+
+    transport = httpx.MockTransport(respond)
+
+    def send(selected: httpx.HTTPTransport, request: httpx.Request) -> httpx.Response:
+        assert isinstance(selected, summarizer._GatewayTransport)
+        return transport.handle_request(request)
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", send)
+    pdf = tmp_path / "agenda.pdf"
+    pdf.write_bytes(_pdf_bytes(1))
+    if gateway_status != 200:
+        with pytest.raises(anthropic.APIStatusError) as pdf_error:
+            summarizer.summarize_pdf(str(pdf), "agenda")
+        with pytest.raises(anthropic.APIStatusError) as text_error:
+            summarizer.summarize_text("public agenda text", "agenda")
+        assert pdf_error.value.status_code == text_error.value.status_code == gateway_status
+    else:
+        assert summarizer.summarize_pdf(str(pdf), "agenda") == "summary"
+        assert summarizer.summarize_text("public agenda text", "agenda") == "summary"
+    assert requests == [
+        ("POST", "/anthropic/v1/files"),
+        ("POST", "/anthropic/v1/messages"),
+        ("DELETE", "/anthropic/v1/files/file_fixture"),
+        ("POST", "/anthropic/v1/messages"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("url", "key", "error"),
+    [
+        ("https://gateway.example/anthropic", "  ", "requires LLM_GATEWAY_URL"),
+        ("", "project-fixture", "requires LLM_GATEWAY_URL"),
+        ("http://gateway.example/anthropic", "project-fixture", "valid HTTPS base URL"),
+        ("https://user@gateway.example/anthropic", "project-fixture", "valid HTTPS base URL"),
+        ("https:///anthropic", "project-fixture", "valid HTTPS base URL"),
+        ("https://gateway.example:bad/anthropic", "project-fixture", "valid HTTPS base URL"),
+        ("https://gateway.example/anthropic?token=x", "project-fixture", "valid HTTPS base URL"),
+        ("https://gateway.example/anthropic#part", "project-fixture", "valid HTTPS base URL"),
+        ("https://gateway.example", "project-fixture", "must end in /anthropic"),
+        ("https://gateway.example/anthropic/v1", "project-fixture", "must end in /anthropic"),
+        ("https://gateway.example/openai", "project-fixture", "must end in /anthropic"),
+        ("https://gateway.example:0/anthropic", "project-fixture", "valid HTTPS base URL"),
+        ("https://gateway.example:65536/anthropic", "project-fixture", "valid HTTPS base URL"),
+    ],
+)
+def test_invalid_gateway_configuration_does_not_use_provider_key(
+    monkeypatch: pytest.MonkeyPatch, url: str, key: str, error: str
+) -> None:
+    monkeypatch.setattr(settings, "llm_mode", "gateway")
+    monkeypatch.setattr(settings, "llm_gateway_url", url)
+    monkeypatch.setattr(settings, "llm_gateway_api_key", SecretStr(key))
+    client = MagicMock()
+    monkeypatch.setattr(anthropic, "Anthropic", client)
+    with pytest.raises(ValueError, match=error):
+        summarizer.summarize_unsummarized()
+    with pytest.raises(ValueError, match=error):
+        summarizer.summarize_text("public agenda text", "agenda")
+    client.assert_not_called()
+
+
+@pytest.mark.parametrize("mode", [None, "direct"])
+def test_direct_mode_keeps_sdk_endpoint_resolution(
+    monkeypatch: pytest.MonkeyPatch, mode: str | None
+) -> None:
+    if mode is None:
+        monkeypatch.delenv("LLM_MODE", raising=False)
+    else:
+        monkeypatch.setenv("LLM_MODE", mode)
+    monkeypatch.setenv("LLM_GATEWAY_URL", "https://gateway.example/anthropic")
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "project-fixture")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "direct-fixture")
+    for override, expected in [
+        (None, "https://api.anthropic.com"),
+        ("https://provider.example", "https://provider.example"),
+    ]:
+        if override is None:
+            monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+        else:
+            monkeypatch.setenv("ANTHROPIC_BASE_URL", override)
+        monkeypatch.setattr(summarizer, "settings", Settings(_env_file=None))
+        with summarizer._summarization_client() as client:
+            assert str(client.base_url).rstrip("/") == expected
+            assert client.api_key == "direct-fixture"
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(summarizer, "settings", Settings(_env_file=None))
+    client_factory = MagicMock()
+    monkeypatch.setattr(anthropic, "Anthropic", client_factory)
+    assert summarizer.summarize_unsummarized() == 0
+    client_factory.assert_not_called()
+
+
+@pytest.mark.parametrize("file_id", ["file_invalid/path", "file_" + "a" * 252])
+def test_pdf_rejects_invalid_upload_id_without_followup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, file_id: str
+) -> None:
+    client = _mock_client(monkeypatch)
+    client.beta.files.upload.return_value = SimpleNamespace(id=file_id)
+    pdf = tmp_path / "agenda.pdf"
+    pdf.write_bytes(_pdf_bytes(1))
+    with pytest.raises(ValueError, match="invalid file ID"):
+        summarizer.summarize_pdf(str(pdf), "agenda")
+    client.beta.messages.create.assert_not_called()
+    client.beta.files.delete.assert_not_called()
 
 
 def test_pdf_uses_disk_handles_without_whole_file_read(
@@ -218,6 +373,14 @@ def test_empty_response_metadata_tolerates_missing_or_unknown_fields(
         summarizer._response_text(cast(Message, message))
     assert "stop_reason=unknown block_types=[] input_tokens=None output_tokens=None" in caplog.text
     assert "private" not in caplog.text
+
+
+def test_empty_response_limits_logged_blocks(caplog: pytest.LogCaptureFixture) -> None:
+    message = SimpleNamespace(content=[TextBlock(type="text", text=" ")] * 100)
+    with pytest.raises(ValueError, match="contained no text"):
+        summarizer._response_text(cast(Message, message))
+    assert caplog.text.count("'TextBlock'") == 10
+    assert "omitted_blocks=90" in caplog.text
 
 
 @pytest.mark.parametrize("beta", [False, True])
