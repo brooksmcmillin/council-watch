@@ -1,5 +1,4 @@
 from ipaddress import IPv4Network, IPv6Network
-from typing import Literal
 from urllib.parse import urljoin
 
 import httpx
@@ -93,8 +92,12 @@ class CityConfig(_SharedEnvSettings):
         return f"{self.base_url}/AgendaCenter/UpdateCategoryList"
 
 
+class GatewayConfigurationError(ValueError):
+    """Gateway summarization cannot start with the selected settings."""
+
+
 class Settings(_SharedEnvSettings):
-    llm_mode: Literal["direct", "gateway"] = "direct"
+    llm_mode: str = "direct"
     anthropic_api_key: str = ""
     llm_gateway_url: str = ""
     llm_gateway_api_key: SecretStr = SecretStr("")
@@ -138,14 +141,21 @@ class Settings(_SharedEnvSettings):
             key = self.anthropic_api_key.strip()
             return (None, key) if key else None
 
+        if self.llm_mode != "gateway":
+            raise GatewayConfigurationError("LLM_MODE must be direct or gateway")
+
         key = self.llm_gateway_api_key.get_secret_value().strip()
         raw_url = self.llm_gateway_url.strip()
         if not raw_url or not key:
-            raise ValueError("LLM_MODE=gateway requires LLM_GATEWAY_URL and LLM_GATEWAY_API_KEY")
+            raise GatewayConfigurationError(
+                "LLM_MODE=gateway requires LLM_GATEWAY_URL and LLM_GATEWAY_API_KEY"
+            )
         try:
             url = httpx.URL(raw_url)
         except httpx.InvalidURL:
-            raise ValueError("LLM_GATEWAY_URL must be a valid HTTPS base URL") from None
+            raise GatewayConfigurationError(
+                "LLM_GATEWAY_URL must be a valid HTTPS base URL"
+            ) from None
         if (
             url.scheme != "https"
             or not url.host
@@ -154,9 +164,9 @@ class Settings(_SharedEnvSettings):
             or url.fragment
             or (url.port is not None and not 1 <= url.port <= 65535)
         ):
-            raise ValueError("LLM_GATEWAY_URL must be a valid HTTPS base URL")
+            raise GatewayConfigurationError("LLM_GATEWAY_URL must be a valid HTTPS base URL")
         if not url.raw_path.rstrip(b"/").endswith(b"/anthropic"):
-            raise ValueError("LLM_GATEWAY_URL must end in /anthropic")
+            raise GatewayConfigurationError("LLM_GATEWAY_URL must end in /anthropic")
         return str(url).rstrip("/"), key
 
     @property

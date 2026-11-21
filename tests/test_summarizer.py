@@ -39,7 +39,7 @@ class _FakeFiles:
     def upload(self, *, file: object) -> object:
         self.recorder["uploaded_file"] = file
         self.recorder["uploaded_content"] = cast(BinaryIO, file).read()
-        return type("Uploaded", (), {"id": "opaque-test-id"})()
+        return type("Uploaded", (), {"id": "opaque.test-id"})()
 
     def delete(self, file_id: str) -> None:
         self.recorder["deleted_file_id"] = file_id
@@ -91,11 +91,11 @@ def test_summarize_pdf_uses_configured_model(
     assert summary == "a summary"
     assert recorder["model"] == "claude-test-model"
     assert recorder["uploaded_content"] == data
-    assert recorder["deleted_file_id"] == "opaque-test-id"
+    assert recorder["deleted_file_id"] == "opaque.test-id"
     messages = cast(list[dict[str, object]], recorder["messages"])
     content = cast(list[dict[str, object]], messages[0]["content"])
     source = content[0]["source"]
-    assert source == {"type": "file", "file_id": "opaque-test-id"}
+    assert source == {"type": "file", "file_id": "opaque.test-id"}
 
 
 @pytest.mark.parametrize("gateway_status", [200, 401, 307])
@@ -237,6 +237,9 @@ def test_pdf_rejects_invalid_upload_id_without_followup(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, file_id: str
 ) -> None:
     client = _mock_client(monkeypatch)
+    monkeypatch.setattr(settings, "llm_mode", "gateway")
+    monkeypatch.setattr(settings, "llm_gateway_url", "https://gateway.example/anthropic")
+    monkeypatch.setattr(settings, "llm_gateway_api_key", SecretStr("project-fixture"))
     client.beta.files.upload.return_value = SimpleNamespace(id=file_id)
     pdf = tmp_path / "agenda.pdf"
     pdf.write_bytes(_pdf_bytes(1))

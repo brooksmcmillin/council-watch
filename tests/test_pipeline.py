@@ -6,7 +6,7 @@ from sqlalchemy import inspect
 from sqlalchemy.orm import Session, sessionmaker
 
 from council_meetings import notifier, scheduler, scraper, summarizer
-from council_meetings.config import city
+from council_meetings.config import GatewayConfigurationError, Settings, city
 from council_meetings.models import ScrapeLog
 
 
@@ -41,3 +41,30 @@ def test_scrape_result_readable_after_session_closes(
     scheduler.run_pipeline()
     summarize.assert_called_once_with()
     notify.assert_called_once_with()
+
+
+@pytest.mark.parametrize("mode", ["gateway", "", "gatway"])
+def test_invalid_gateway_does_not_block_existing_notifications(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, mode: str
+) -> None:
+    monkeypatch.setenv("LLM_MODE", mode)
+    monkeypatch.setenv("LLM_GATEWAY_URL", "")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "direct-fixture")
+    monkeypatch.setattr(summarizer, "settings", Settings(_env_file=None))
+    monkeypatch.setattr(
+        scraper,
+        "scrape_meetings",
+        Mock(return_value=ScrapeLog(meetings_found=0, new_documents=0, revised_documents=0)),
+    )
+    notify = Mock(return_value=1)
+    client = Mock()
+    monkeypatch.setattr(notifier, "notify_new_summaries", notify)
+    monkeypatch.setattr(summarizer.anthropic, "Anthropic", client)
+
+    scheduler.run_pipeline()
+
+    assert "Gateway summarization skipped" in caplog.text
+    notify.assert_called_once_with()
+    with pytest.raises(GatewayConfigurationError):
+        summarizer.summarize_unsummarized()
+    client.assert_not_called()

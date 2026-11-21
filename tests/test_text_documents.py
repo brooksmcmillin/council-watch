@@ -1,8 +1,11 @@
+import logging
 from datetime import date
 from pathlib import Path
+from threading import Thread
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
 
+import httpcore
 import httpx
 import pytest
 from anthropic.types import TextBlock
@@ -120,13 +123,19 @@ def test_failed_document_logs_public_mapping_not_source_contents(
     monkeypatch.setattr(settings, "llm_gateway_url", "https://gateway.example/anthropic")
     monkeypatch.setattr(settings, "llm_gateway_api_key", SecretStr("project-fixture"))
     requests: list[tuple[str, str]] = []
+    delete_path = "/anthropic/v1/files/project-fixture"
 
     def reject(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "gateway.example"
         path = request.url.path
         requests.append((request.method, path))
-        if path.endswith("/files") or request.method == "DELETE":
-            return httpx.Response(200, json={"id": "file_fixture"})
+        if path.endswith("/files"):
+            return httpx.Response(200, json={"id": "project-fixture"})
+        if request.method == "DELETE":
+            assert path == delete_path
+            if requests.count(("DELETE", delete_path)) == 1:
+                return httpx.Response(500, headers={"retry-after-ms": "1"})
+            return httpx.Response(200, json={"id": "project-fixture"})
         assert path == "/anthropic/v1/messages"
         return httpx.Response(
             401,
@@ -138,7 +147,7 @@ def test_failed_document_logs_public_mapping_not_source_contents(
     monkeypatch.setattr(
         httpx.HTTPTransport, "handle_request", lambda _, request: transport.handle_request(request)
     )
-    caplog.set_level("INFO")
+    caplog.set_level("DEBUG")
     assert summarizer.summarize_unsummarized() == 0
     source = "pdf" if pdf_path else "html"
     assert f"id=67, type=agenda) public_meeting=/meeting/35 source={source}" in caplog.text
@@ -148,12 +157,63 @@ def test_failed_document_logs_public_mapping_not_source_contents(
     expected = [("POST", "/anthropic/v1/messages")]
     if pdf_path:
         expected.insert(0, ("POST", "/anthropic/v1/files"))
-        expected.append(("DELETE", "/anthropic/v1/files/file_fixture"))
+        expected.extend([("DELETE", delete_path)] * 2)
     assert requests == expected
     db_session.expire_all()
     saved = db_session.get(Document, 67)
     assert saved is not None and saved.summary is None
     assert saved.summarized_at is None and saved.summary_model is None
+
+
+def test_gateway_log_boundary_keeps_other_threads_and_omits_request_id(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(settings, "llm_mode", "gateway")
+    monkeypatch.setattr(settings, "llm_gateway_url", "https://gateway.example/anthropic")
+    monkeypatch.setattr(settings, "llm_gateway_api_key", SecretStr("project-fixture"))
+    sdk_logger = logging.getLogger("anthropic._base_client")
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert b"private-payload" in request.read()
+        worker = Thread(target=sdk_logger.info, args=("concurrent worker visible",))
+        worker.start()
+        worker.join()
+        return httpx.Response(200, json={"content": []}, headers={"request-id": "req_private-echo"})
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", lambda _, req: respond(req))
+    caplog.set_level("DEBUG")
+    with pytest.raises(ValueError, match="contained no text"):
+        summarizer.summarize_text("private-payload", "agenda")
+    sdk_logger.info("calling worker restored")
+    assert "concurrent worker visible" in caplog.text
+    assert "calling worker restored" in caplog.text
+    assert "request_id=unavailable" in caplog.text
+    assert "private-" not in caplog.text
+
+
+def test_http11_gateway_headers_are_not_logged(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(settings, "llm_mode", "gateway")
+    monkeypatch.setattr(settings, "llm_gateway_url", "https://gateway.example/anthropic")
+    monkeypatch.setattr(settings, "llm_gateway_api_key", SecretStr("project-fixture"))
+    init = httpcore.ConnectionPool.__init__
+    wire = (
+        b"HTTP/1.1 200 private-reason\r\nContent-Type: application/json\r\n"
+        b"Request-Id: req_private-echo\r\nContent-Length: 14\r\n\r\n"
+        b'{"content":[]}'
+    )
+
+    def offline_pool(pool: httpcore.ConnectionPool, **kwargs: object) -> None:
+        init(pool, **{**kwargs, "network_backend": httpcore.MockBackend([wire])})
+
+    monkeypatch.setattr(httpcore.ConnectionPool, "__init__", offline_pool)
+    caplog.set_level("DEBUG")
+    with pytest.raises(ValueError, match="contained no text"):
+        summarizer.summarize_text("public text", "agenda")
+    assert "request_id=unavailable" in caplog.text
+    assert "private-" not in caplog.text
+    assert not any(record.name == "httpcore.http11" for record in caplog.records)
 
 
 def test_missing_key_never_calls_html_api(monkeypatch: pytest.MonkeyPatch) -> None:

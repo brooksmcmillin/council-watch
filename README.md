@@ -268,16 +268,17 @@ changing resource limits or claiming production recovery.
 ### Empty summary diagnostics
 
 If a provider response has no usable text, the summarizer logs a WARNING with
-`stop_reason`, SDK content-block class names, and input/output token counts before
+`stop_reason`, up to ten SDK content-block class names (plus an omitted count),
+and input/output token counts before
 raising the existing error. Unknown stop reasons become `unknown`; absent or
 non-integer token counts become `None`. Refusals also report an allowlisted
 `refusal_category` from the provider's `stop_details`: `cyber`, `bio`,
 `frontier_llm`, `reasoning_extraction`, or `general_harms`. Missing categories
 become `unavailable`, explicit null becomes `unspecified`, and unrecognized
-values become `unknown`; other stop reasons use `not_applicable`. A provider
-`request_id` is logged only when it matches `req_` plus ASCII letters, digits,
-underscores or hyphens, with at most 128 characters total; otherwise it is
-`unavailable`. It can be supplied to provider support for investigation.
+values become `unknown`; other stop reasons use `not_applicable`. In direct
+mode, `request_id` can be supplied to provider support if it matches `req_`
+plus ASCII letters, digits, underscores or hyphens (at most 128 characters).
+Gateway mode and non-matching IDs always report `unavailable`.
 
 Each document-start log includes its public `/meeting/<id>` path and selected
 `pdf` or `html` source kind. Document IDs and meeting IDs are different: use that
