@@ -3,9 +3,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
 
+import httpx
 import pytest
 from anthropic.types import TextBlock
 from bs4 import BeautifulSoup
+from pydantic import SecretStr
 from sqlalchemy.orm import Session, sessionmaker
 
 from council_meetings import notifier, summarizer
@@ -23,7 +25,9 @@ def test_html_text_uses_messages_not_pdf_upload(
         content=[TextBlock(type="text", text="Fixture summary")]
     )
     monkeypatch.setattr(summarizer.anthropic, "Anthropic", lambda **_: api)
+    monkeypatch.setattr(settings, "llm_mode", "direct")
     monkeypatch.setattr(settings, "summarization_model", "fixture-model")
+    monkeypatch.setattr(settings, "anthropic_api_key", "fixture-key")
     assert summarizer.summarize_text("Public meeting text", doc_type) == "Fixture summary"
     api.beta.files.upload.assert_not_called()
     call = api.messages.create.call_args.kwargs
@@ -59,6 +63,7 @@ def test_text_eligibility_failure_retry_and_pdf_path(
         )
     db_session.commit()
     monkeypatch.setattr(summarizer, "SessionLocal", sessionmaker(bind=db_session.get_bind()))
+    monkeypatch.setattr(settings, "llm_mode", "direct")
     monkeypatch.setattr(settings, "anthropic_api_key", "fixture-key")
     text = Mock(side_effect=[RuntimeError("temporary failure"), "Text summary"])
     pdf = Mock(return_value="PDF summary")
@@ -85,8 +90,12 @@ def test_failed_document_logs_public_mapping_not_source_contents(
     tmp_path: Path,
 ) -> None:
     if pdf_path:
+        from pypdf import PdfWriter
+
         path = tmp_path / pdf_path
-        path.write_bytes(b"%PDF-fixture")
+        writer = PdfWriter()
+        writer.add_blank_page(width=100, height=100)
+        writer.write(path)
         pdf_path = str(path)
     meeting = Meeting(
         id=35,
@@ -106,24 +115,49 @@ def test_failed_document_logs_public_mapping_not_source_contents(
     db_session.add(document)
     db_session.commit()
     monkeypatch.setattr(summarizer, "SessionLocal", sessionmaker(bind=db_session.get_bind()))
-    monkeypatch.setattr(settings, "anthropic_api_key", "fixture-key")
-    pdf = Mock(side_effect=ValueError("Summarization response contained no text"))
-    text = Mock(side_effect=ValueError("Summarization response contained no text"))
-    monkeypatch.setattr(summarizer, "summarize_pdf", pdf)
-    monkeypatch.setattr(summarizer, "summarize_text", text)
-    caplog.set_level("INFO", logger=summarizer.__name__)
+    monkeypatch.setattr(settings, "llm_mode", "gateway")
+    monkeypatch.setattr(settings, "anthropic_api_key", "")
+    monkeypatch.setattr(settings, "llm_gateway_url", "https://gateway.example/anthropic")
+    monkeypatch.setattr(settings, "llm_gateway_api_key", SecretStr("project-fixture"))
+    requests: list[tuple[str, str]] = []
+
+    def reject(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "gateway.example"
+        path = request.url.path
+        requests.append((request.method, path))
+        if path.endswith("/files") or request.method == "DELETE":
+            return httpx.Response(200, json={"id": "file_fixture"})
+        assert path == "/anthropic/v1/messages"
+        return httpx.Response(
+            401,
+            extensions={"reason_phrase": b"private-reason project-fixture"},
+            json={"error": {"message": "private-echo project-fixture"}},
+        )
+
+    transport = httpx.MockTransport(reject)
+    monkeypatch.setattr(
+        httpx.HTTPTransport, "handle_request", lambda _, request: transport.handle_request(request)
+    )
+    caplog.set_level("INFO")
     assert summarizer.summarize_unsummarized() == 0
     source = "pdf" if pdf_path else "html"
     assert f"id=67, type=agenda) public_meeting=/meeting/35 source={source}" in caplog.text
     assert "private" not in caplog.text
-    assert pdf.call_count == int(pdf_path is not None)
-    assert text.call_count == int(pdf_path is None)
+    assert "project-fixture" not in caplog.text
+    assert "AuthenticationError (http_status=401)" in caplog.text
+    expected = [("POST", "/anthropic/v1/messages")]
+    if pdf_path:
+        expected.insert(0, ("POST", "/anthropic/v1/files"))
+        expected.append(("DELETE", "/anthropic/v1/files/file_fixture"))
+    assert requests == expected
     db_session.expire_all()
     saved = db_session.get(Document, 67)
     assert saved is not None and saved.summary is None
+    assert saved.summarized_at is None and saved.summary_model is None
 
 
 def test_missing_key_never_calls_html_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "llm_mode", "direct")
     monkeypatch.setattr(settings, "anthropic_api_key", "")
     api = Mock()
     monkeypatch.setattr(summarizer.anthropic, "Anthropic", api)

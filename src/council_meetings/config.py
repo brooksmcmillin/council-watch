@@ -1,7 +1,9 @@
 from ipaddress import IPv4Network, IPv6Network
+from typing import Literal
 from urllib.parse import urljoin
 
 import httpx
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings
 
 
@@ -92,8 +94,10 @@ class CityConfig(_SharedEnvSettings):
 
 
 class Settings(_SharedEnvSettings):
-    # Required
+    llm_mode: Literal["direct", "gateway"] = "direct"
     anthropic_api_key: str = ""
+    llm_gateway_url: str = ""
+    llm_gateway_api_key: SecretStr = SecretStr("")
 
     # Summarization model (env-overridable via SUMMARIZATION_MODEL)
     summarization_model: str = "claude-sonnet-5"
@@ -127,6 +131,33 @@ class Settings(_SharedEnvSettings):
     # minutes and older meetings are captured without manual runs.
     backfill_years: int = 2  # number of prior years to re-scrape (0 disables)
     backfill_interval_hours: int = 168  # default weekly
+
+    def summarization_route(self) -> tuple[str | None, str] | None:
+        """Return the selected base URL and key; only unconfigured direct mode may skip."""
+        if self.llm_mode == "direct":
+            key = self.anthropic_api_key.strip()
+            return (None, key) if key else None
+
+        key = self.llm_gateway_api_key.get_secret_value().strip()
+        raw_url = self.llm_gateway_url.strip()
+        if not raw_url or not key:
+            raise ValueError("LLM_MODE=gateway requires LLM_GATEWAY_URL and LLM_GATEWAY_API_KEY")
+        try:
+            url = httpx.URL(raw_url)
+        except httpx.InvalidURL:
+            raise ValueError("LLM_GATEWAY_URL must be a valid HTTPS base URL") from None
+        if (
+            url.scheme != "https"
+            or not url.host
+            or url.userinfo
+            or url.query
+            or url.fragment
+            or (url.port is not None and not 1 <= url.port <= 65535)
+        ):
+            raise ValueError("LLM_GATEWAY_URL must be a valid HTTPS base URL")
+        if not url.raw_path.rstrip(b"/").endswith(b"/anthropic"):
+            raise ValueError("LLM_GATEWAY_URL must end in /anthropic")
+        return str(url).rstrip("/"), key
 
     @property
     def email_enabled(self) -> bool:

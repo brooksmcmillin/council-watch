@@ -77,7 +77,7 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync                      # install deps (--all-groups also gets the dev tools)
-cp .env.example .env         # then set ANTHROPIC_API_KEY at minimum
+cp .env.example .env         # then configure the summarization mode below
 uv run alembic upgrade head  # create data/council.db
 uv run uvicorn council_meetings.main:app --reload --no-proxy-headers
 ```
@@ -166,14 +166,16 @@ not a claim that the source is irretrievable or successfully summarized.
 ## Configuration
 
 Configuration is entirely environment variables, read via pydantic-settings from
-`.env` — see `.env.example` for the full annotated list. `ANTHROPIC_API_KEY` is
-the only value the pipeline can't run without; every notification channel is
-optional and is skipped when left blank.
+`.env` — see `.env.example` for the full annotated list. Notification channels
+are optional and are skipped when left blank.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `ANTHROPIC_API_KEY` | — | Required for summarization |
-| `SUMMARIZATION_MODEL` | `claude-sonnet-5` | Any Claude model id |
+| `LLM_MODE` | `direct` | Select `direct` or `gateway` |
+| `ANTHROPIC_API_KEY` | — | Provider key for direct mode only; if unset, direct summarization is skipped |
+| `LLM_GATEWAY_URL` | — | Gateway mode only: native Anthropic HTTPS base URL, e.g. `https://llm.brooksmcmillin.com/anthropic` |
+| `LLM_GATEWAY_API_KEY` | — | Gateway mode only: council-watch project key from the secret store |
+| `SUMMARIZATION_MODEL` | `claude-sonnet-5` | A model ID allowed by the selected provider or gateway |
 | `DATABASE_URL` | `sqlite:///data/council.db` | |
 | `PDF_STORAGE_DIR` | `data/pdfs` | |
 | `APP_BASE_URL` | `http://localhost:8000` | Used to build links in emails |
@@ -183,6 +185,29 @@ optional and is skipped when left blank.
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM` | blank | Email turns on once `SMTP_HOST` and `EMAIL_FROM` are both set |
 | `EMAIL_TO` | blank | Optional comma-separated static/admin recipients (always notified, no unsubscribe link) |
 | `BLUESKY_HANDLE`, `BLUESKY_APP_PASSWORD` | blank | Both required to enable Bluesky posts |
+
+### Choosing the summarization route
+
+For gateway mode, set `LLM_MODE=gateway` and both `LLM_GATEWAY_*` variables.
+Use the native Anthropic base URL (including `/anthropic`), not an OpenAI
+endpoint or a URL ending in `/v1`. The application sends both the PDF Files and
+Messages requests through this route; missing or invalid settings fail the
+summarization run without falling back to the provider. Leave
+`ANTHROPIC_API_KEY` unset in gateway mode. Inject the project key at runtime;
+never commit it or supply a gateway master key. Use the trusted gateway host
+and port supplied by the operator. Gateway mode ignores environment proxies and
+CA overrides, and does not follow redirects. Gateway operators own centralized
+usage attribution and Langfuse telemetry; the application needs no Langfuse keys.
+
+For direct mode, set `LLM_MODE=direct` with `ANTHROPIC_API_KEY` to use Anthropic
+without the gateway. This is also the default for unchanged deployments and
+retains the SDK's `ANTHROPIC_BASE_URL` behavior. For a local process, export
+that SDK override in the process environment; putting it only in `.env` is
+not enough unless your launcher (such as Compose) exports the file.
+
+Restart the local process or recreate the Compose container after changing mode
+or credentials. For a managed workload, have its deployment owner replace the
+workload. An HTTP health check alone does not verify the summarization route.
 
 ### Pointing it at a different city
 
