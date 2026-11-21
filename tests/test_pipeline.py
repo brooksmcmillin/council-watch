@@ -43,12 +43,16 @@ def test_scrape_result_readable_after_session_closes(
     notify.assert_called_once_with()
 
 
-@pytest.mark.parametrize("mode", ["gateway", "", "gatway"])
+@pytest.mark.parametrize(
+    ("mode", "url"),
+    [("gateway", ""), ("", ""), ("gatway", ""), ("gateway", "https://xn--abc-.example/anthropic")],
+)
 def test_invalid_gateway_does_not_block_existing_notifications(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, mode: str
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, mode: str, url: str
 ) -> None:
     monkeypatch.setenv("LLM_MODE", mode)
-    monkeypatch.setenv("LLM_GATEWAY_URL", "")
+    monkeypatch.setenv("LLM_GATEWAY_URL", url)
+    monkeypatch.setenv("LLM_GATEWAY_API_KEY", "project-fixture")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "direct-fixture")
     monkeypatch.setattr(summarizer, "settings", Settings(_env_file=None))
     monkeypatch.setattr(

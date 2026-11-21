@@ -152,13 +152,14 @@ class Settings(_SharedEnvSettings):
             )
         try:
             url = httpx.URL(raw_url)
-        except httpx.InvalidURL:
+            host = url.host  # HTTPX decodes IDNA lazily.
+        except (httpx.InvalidURL, UnicodeError):
             raise GatewayConfigurationError(
                 "LLM_GATEWAY_URL must be a valid HTTPS base URL"
             ) from None
         if (
             url.scheme != "https"
-            or not url.host
+            or not host
             or url.userinfo
             or url.query
             or url.fragment
